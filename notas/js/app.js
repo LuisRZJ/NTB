@@ -1,19 +1,28 @@
 import { initializeTheme } from './componentes/theme.js';
 import { initializeNotes, saveNotesToStorage } from './componentes/storage.js';
-import { refreshNotesView, renderLabelsSidebars } from './componentes/renderer.js';
+import { refreshNotesView } from './componentes/renderer.js';
 import { updateBadgesCounts } from './componentes/badges.js';
 import { handleSearch } from './componentes/search.js';
 import { toggleLayout, toggleLayoutStyles } from './componentes/layout.js';
 import { toggleTheme } from './componentes/theme.js';
 import { openFullEditor } from './componentes/dialog-editor.js';
+import { populateLabelSelectors, renderSidebarLabels } from './componentes/labels.js';
 
 export function initializeApp() {
     initializeTheme();
     initializeNotes();
-    renderLabelsSidebars();
+    populateLabelSelectors();
+    renderSidebarLabels();
     refreshNotesView();
     updateBadgesCounts();
     toggleLayoutStyles();
+    detectTouchDevice();
+}
+
+function detectTouchDevice() {
+    if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+        document.body.classList.add('touch-device');
+    }
 }
 
 export function cleanupForExport() {
@@ -26,11 +35,6 @@ export function cleanupForExport() {
     window.moveNoteToTrash = null;
     window.restoreNoteFromTrash = null;
     window.permanentlyDeleteNote = null;
-    window.expandQuickNote = null;
-    window.collapseQuickNote = null;
-    window.toggleQuickPin = null;
-    window.setQuickColor = null;
-    window.handleQuickNoteSubmit = null;
     window.openFullEditor = null;
     window.openFullEditorForEdit = null;
     window.closeDialog = null;

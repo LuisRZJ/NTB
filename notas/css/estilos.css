@@ -29,3 +29,52 @@ body {
 .dark ::-webkit-scrollbar-thumb {
     background: #475569;
 }
+
+.label-marquee-container {
+    position: relative;
+    overflow: hidden;
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.label-marquee {
+    display: inline-block;
+    white-space: nowrap;
+    animation: marquee 8s linear infinite;
+    animation-play-state: paused;
+    will-change: transform;
+}
+
+.label-marquee-container:hover .label-marquee,
+.label-marquee-container:focus .label-marquee,
+.touch-device .label-marquee {
+    animation-play-state: running;
+}
+
+@keyframes marquee {
+    0% {
+        transform: translateX(0);
+    }
+    100% {
+        transform: translateX(-100%);
+    }
+}
+
+.label-marquee-container::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to right, transparent, currentColor);
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.label-marquee-container:hover::after,
+.label-marquee-container:focus::after,
+.touch-device .label-marquee-container::after {
+    opacity: 0;
+}

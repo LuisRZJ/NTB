@@ -1,9 +1,31 @@
-import { state } from './state.js';
+import { state, getLabelsList, setLabelsList } from './state.js';
 import { updateBadgesCounts } from './badges.js';
+
+const DEFAULT_LABELS = ["Personal", "Trabajo", "Ideas", "Tareas"];
 
 export function saveNotesToStorage() {
     localStorage.setItem('google_keep_notes', JSON.stringify(state.notes));
     updateBadgesCounts();
+}
+
+export function saveLabelsToStorage() {
+    localStorage.setItem('google_keep_labels', JSON.stringify(getLabelsList()));
+}
+
+export function loadLabelsFromStorage() {
+    const stored = localStorage.getItem('google_keep_labels');
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                setLabelsList(parsed);
+                return;
+            }
+        } catch (e) {
+            console.error('Error parsing stored labels:', e);
+        }
+    }
+    setLabelsList([...DEFAULT_LABELS]);
 }
 
 export function loadNotesFromStorage() {
@@ -11,6 +33,11 @@ export function loadNotesFromStorage() {
     if (stored) {
         try {
             state.notes = JSON.parse(stored);
+            state.notes.forEach(note => {
+                if (!note.history) note.history = [];
+                if (!note.createdAt) note.createdAt = Date.now();
+                if (!note.updatedAt) note.updatedAt = note.createdAt;
+            });
         } catch (e) {
             console.error('Error parsing stored notes:', e);
             state.notes = getDefaultNotes();
@@ -21,6 +48,7 @@ export function loadNotesFromStorage() {
 }
 
 function getDefaultNotes() {
+    const now = Date.now();
     return [
         {
             id: 'mock-1',
@@ -31,7 +59,9 @@ function getDefaultNotes() {
             isPinned: true,
             isArchived: false,
             isTrash: false,
-            createdAt: Date.now() - 3600000
+            createdAt: now - 3600000,
+            updatedAt: now - 3600000,
+            history: []
         },
         {
             id: 'mock-2',
@@ -42,7 +72,9 @@ function getDefaultNotes() {
             isPinned: false,
             isArchived: false,
             isTrash: false,
-            createdAt: Date.now() - 7200000
+            createdAt: now - 7200000,
+            updatedAt: now - 7200000,
+            history: []
         },
         {
             id: 'mock-3',
@@ -53,12 +85,15 @@ function getDefaultNotes() {
             isPinned: false,
             isArchived: false,
             isTrash: false,
-            createdAt: Date.now() - 86400000
+            createdAt: now - 86400000,
+            updatedAt: now - 86400000,
+            history: []
         }
     ];
 }
 
 export function initializeNotes() {
     loadNotesFromStorage();
+    loadLabelsFromStorage();
     saveNotesToStorage();
 }

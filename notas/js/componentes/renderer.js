@@ -1,8 +1,69 @@
-import { state, colorPalette, labelsList } from './state.js';
+import { state, colorPalette, getLabelsList } from './state.js';
 import { saveNotesToStorage } from './storage.js';
 import { toggleLayoutStyles } from './layout.js';
 import { showToast } from './toast.js';
 import { updateBadgesCounts } from './badges.js';
+import { renderMarkdown } from './markdown.js';
+
+export function formatDate(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Hace un momento';
+    if (diffMins < 60) return `Hace ${diffMins} min`;
+    if (diffHours < 24) return `Hace ${diffHours} h`;
+    if (diffDays < 7) return `Hace ${diffDays} días`;
+
+    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+}
+
+export function formatFullDate(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    return date.toLocaleDateString('es-ES', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+export function isToday(timestamp) {
+    const date = new Date(timestamp);
+    const today = new Date();
+    return date.toDateString() === today.toDateString();
+}
+
+export function isYesterday(timestamp) {
+    const date = new Date(timestamp);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return date.toDateString() === yesterday.toDateString();
+}
+
+export function getDateGroupLabel(timestamp) {
+    if (!timestamp) return null;
+    if (isToday(timestamp)) return 'Hoy';
+    if (isYesterday(timestamp)) return 'Ayer';
+    const date = new Date(timestamp);
+    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+export function createDateSeparator(label, isPinned = false) {
+    const div = document.createElement('div');
+    div.className = 'col-span-full flex items-center gap-3 py-2';
+    div.innerHTML = `
+        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 shrink-0">${label}</span>
+        <div class="flex-1 h-px bg-slate-200 dark:bg-slate-700"></div>
+    `;
+    return div;
+}
 
 export function refreshNotesView() {
     const notesGrid = document.getElementById('notes-grid');
@@ -37,10 +98,10 @@ export function refreshNotesView() {
             return note.label === state.selectedLabelFilter && !note.isTrash && !note.isArchived;
         }
         return true;
-    });
+    }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
     const showPinnedHeaderSplit = (state.currentTab === 'notes' || state.currentTab === 'tag');
-    
+
     let pinnedNotes = [];
     let otherNotes = [];
 
@@ -54,18 +115,14 @@ export function refreshNotesView() {
     if (pinnedNotes.length > 0) {
         pinnedSection?.classList.remove('hidden');
         otherSectionTitle?.classList.remove('hidden');
-        pinnedNotes.forEach(note => {
-            pinnedGrid.appendChild(createNoteCard(note));
-        });
+        renderNotesWithDateSeparators(pinnedGrid, pinnedNotes);
     } else {
         pinnedSection?.classList.add('hidden');
         otherSectionTitle?.classList.add('hidden');
     }
 
     if (otherNotes.length > 0) {
-        otherNotes.forEach(note => {
-            notesGrid.appendChild(createNoteCard(note));
-        });
+        renderNotesWithDateSeparators(notesGrid, otherNotes);
     }
 
     if (filtered.length === 0) {
@@ -79,52 +136,80 @@ export function refreshNotesView() {
     updateBadgesCounts();
 }
 
+export function renderNotesWithDateSeparators(container, notes) {
+    let lastDateLabel = null;
+
+    notes.forEach((note, index) => {
+        const currentDateLabel = getDateGroupLabel(note.createdAt);
+
+        if (currentDateLabel !== lastDateLabel) {
+            container.appendChild(createDateSeparator(currentDateLabel));
+            lastDateLabel = currentDateLabel;
+        }
+
+        container.appendChild(createNoteCard(note));
+    });
+}
+
 export function createNoteCard(note) {
     const card = document.createElement('div');
     const colorMeta = colorPalette[note.color] || colorPalette.default;
-    
+
     card.className = `note-card group p-5 rounded-3xl border transition-all duration-300 relative hover:shadow-md cursor-pointer flex flex-col justify-between ${colorMeta.bgLight} ${colorMeta.borderLight} ${colorMeta.bgDark} ${colorMeta.borderDark}`;
     card.dataset.id = note.id;
 
     const pinIconColor = note.isPinned ? 'text-amber-500 fill-amber-500' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600';
-    const formattedContent = note.content.replace(/\n/g, '<br>');
+    const renderedTitle = note.title ? renderMarkdown(note.title) : 'Sin Título';
+    const renderedContent = note.content ? renderMarkdown(note.content) : '';
+    const createdDate = formatDate(note.createdAt);
+    const wasEdited = note.updatedAt && note.updatedAt !== note.createdAt;
+    const editedDate = wasEdited ? formatDate(note.updatedAt) : '';
+    const hasHistory = note.history && note.history.length > 0;
 
     card.setAttribute('onclick', `openFullEditorForEdit('${note.id}', event)`);
 
     card.innerHTML = `
         <div>
             <div class="flex items-start justify-between gap-3 mb-2">
-                <h4 class="font-bold text-sm text-slate-800 dark:text-slate-100 line-clamp-2 pr-6">${note.title || 'Sin Título'}</h4>
+                <h4 class="font-bold text-sm text-slate-800 dark:text-slate-100 line-clamp-2 pr-6">${renderedTitle}</h4>
                 <button onclick="toggleCardPin('${note.id}', event)" class="absolute top-4 right-4 p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex transition-colors z-10" title="Destacar">
                     <span class="material-symbols-outlined text-xl ${pinIconColor}">keep</span>
                 </button>
             </div>
-            
-            <p class="text-xs text-slate-600 dark:text-slate-300 line-clamp-6 leading-relaxed mb-4">${formattedContent}</p>
+
+            <div class="text-xs text-slate-600 dark:text-slate-300 line-clamp-6 leading-relaxed mb-4 markdown-content">${renderedContent}</div>
         </div>
 
         <div class="flex items-center justify-between mt-auto pt-2 border-t border-slate-200/40 dark:border-slate-800/20">
-            <div class="flex items-center gap-1.5 overflow-hidden">
+            <div class="flex items-center gap-2 min-w-0">
                 ${note.label ? `
-                    <span class="inline-flex text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-300 max-w-[80px] truncate" title="Etiqueta: ${note.label}">
-                        ${note.label}
+                    <span class="label-marquee-container text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-300 max-w-[120px]" title="${note.label}" onclick="event.stopPropagation()">
+                        <span class="label-marquee">${note.label}</span>
                     </span>
                 ` : ''}
+                <span class="text-[10px] text-slate-400 dark:text-slate-500 shrink-0" title="${createdDate}">
+                    ${createdDate}${editedDate ? ' · Editada' : ''}
+                </span>
             </div>
-            
-            <div class="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-200">
+
+            <div class="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-200 shrink-0">
+                ${hasHistory ? `
+                    <button onclick="openNoteHistory('${note.id}', event)" class="p-1 shrink-0 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex text-slate-500 dark:text-slate-400" title="Historial">
+                        <span class="material-symbols-outlined text-base">history</span>
+                    </button>
+                ` : ''}
                 ${note.isTrash ? `
-                    <button onclick="restoreNoteFromTrash('${note.id}', event)" class="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex text-slate-500 dark:text-slate-400" title="Restaurar nota">
+                    <button onclick="restoreNoteFromTrash('${note.id}', event)" class="p-1 shrink-0 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex text-slate-500 dark:text-slate-400" title="Restaurar nota">
                         <span class="material-symbols-outlined text-base">restore_from_trash</span>
                     </button>
-                    <button onclick="permanentlyDeleteNote('${note.id}', event)" class="p-1.5 hover:bg-red-500/10 rounded-full flex text-red-500" title="Eliminar permanentemente">
+                    <button onclick="permanentlyDeleteNote('${note.id}', event)" class="p-1 shrink-0 hover:bg-red-500/10 rounded-full flex text-red-500" title="Eliminar permanentemente">
                         <span class="material-symbols-outlined text-base">delete_forever</span>
                     </button>
                 ` : `
-                    <button onclick="toggleCardArchive('${note.id}', event)" class="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex text-slate-500 dark:text-slate-400" title="${note.isArchived ? 'Desarchivar' : 'Archivar'}">
+                    <button onclick="toggleCardArchive('${note.id}', event)" class="p-1 shrink-0 hover:bg-black/5 dark:hover:bg-white/10 rounded-full flex text-slate-500 dark:text-slate-400" title="${note.isArchived ? 'Desarchivar' : 'Archivar'}">
                         <span class="material-symbols-outlined text-base">${note.isArchived ? 'unarchive' : 'archive'}</span>
                     </button>
-                    <button onclick="moveNoteToTrash('${note.id}', event)" class="p-1.5 hover:bg-red-500/10 rounded-full flex text-red-500 hover:text-red-600" title="Mover a papelera">
+                    <button onclick="moveNoteToTrash('${note.id}', event)" class="p-1 shrink-0 hover:bg-red-500/10 rounded-full flex text-red-500 hover:text-red-600" title="Mover a papelera">
                         <span class="material-symbols-outlined text-base">delete</span>
                     </button>
                 `}
@@ -152,7 +237,7 @@ export function renderCategoryFilterChips() {
     pinnedBtn.innerText = 'Destacadas';
     container.appendChild(pinnedBtn);
 
-    labelsList.forEach(lbl => {
+    getLabelsList().forEach(lbl => {
         const btn = document.createElement('button');
         btn.onclick = () => filterByLabel(lbl);
         const isActive = (state.currentTab === 'tag' && state.selectedLabelFilter === lbl);
@@ -169,7 +254,7 @@ export function renderLabelsSidebars() {
     if (sideCont) sideCont.innerHTML = '';
     if (mobCont) mobCont.innerHTML = '';
 
-    labelsList.forEach(label => {
+    getLabelsList().forEach(label => {
         const btn = document.createElement('button');
         btn.onclick = () => filterByLabel(label);
         btn.dataset.label = label;

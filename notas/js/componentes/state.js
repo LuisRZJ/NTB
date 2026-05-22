@@ -1,4 +1,24 @@
-export const labelsList = ["Personal", "Trabajo", "Ideas", "Tareas"];
+let labelsList = ["Personal", "Trabajo", "Ideas", "Tareas"];
+
+export function getLabelsList() {
+    return [...labelsList];
+}
+
+export function setLabelsList(newLabels) {
+    labelsList = newLabels;
+}
+
+export function addLabel(label) {
+    if (!labelsList.includes(label)) {
+        labelsList.push(label);
+    }
+}
+
+export function removeLabel(label) {
+    labelsList = labelsList.filter(l => l !== label);
+}
+
+export { labelsList };
 
 export const colorPalette = {
     default: {
@@ -72,4 +92,54 @@ export function resetDialogState() {
     state.dialogColor = 'default';
     state.dialogIsPinned = false;
     state.dialogIsArchived = false;
+}
+
+export function createNoteSnapshot(note, action = 'create') {
+    return {
+        id: 'snapshot-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+        noteId: note.id,
+        title: note.title,
+        content: note.content,
+        color: note.color,
+        label: note.label,
+        isPinned: note.isPinned,
+        timestamp: Date.now(),
+        action: action
+    };
+}
+
+export function addNoteToHistory(note, action = 'edit') {
+    if (!note.history) {
+        note.history = [];
+    }
+    const snapshot = createNoteSnapshot(note, action);
+    note.history.push(snapshot);
+    if (note.history.length > 50) {
+        note.history = note.history.slice(-50);
+    }
+    note.updatedAt = Date.now();
+}
+
+export function getNoteHistory(noteId) {
+    const note = state.notes.find(n => n.id === noteId);
+    return note ? (note.history || []) : [];
+}
+
+export function restoreNoteFromSnapshot(noteId, snapshotId) {
+    const note = state.notes.find(n => n.id === noteId);
+    if (!note) return null;
+
+    const snapshot = note.history?.find(s => s.id === snapshotId);
+    if (!snapshot) return null;
+
+    note.title = snapshot.title;
+    note.content = snapshot.content;
+    note.color = snapshot.color;
+    note.label = snapshot.label;
+    note.isPinned = snapshot.isPinned;
+    note.updatedAt = Date.now();
+
+    addNoteToHistory(note, 'restore');
+
+    return note;
 }

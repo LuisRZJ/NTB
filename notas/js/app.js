@@ -1,6 +1,7 @@
 import { initializeTheme } from './componentes/theme.js';
 import { initializeNotes, saveNotesToStorage } from './componentes/storage.js';
-import { refreshNotesView, renderLabelsSidebars, updateBadgesCounts } from './componentes/renderer.js';
+import { refreshNotesView, renderLabelsSidebars } from './componentes/renderer.js';
+import { updateBadgesCounts } from './componentes/badges.js';
 import { handleSearch } from './componentes/search.js';
 import { toggleLayout, toggleLayoutStyles } from './componentes/layout.js';
 import { toggleTheme } from './componentes/theme.js';

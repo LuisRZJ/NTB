@@ -1,0 +1,650 @@
+body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    transition: font-variation-settings 0.2s ease;
+}
+
+.active .material-symbols-outlined,
+.section-tab.active .material-symbols-outlined {
+    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #475569;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Editor content styles */
+.editor-content:focus {
+    outline: none;
+}
+
+.editor-content h1 {
+    font-size: 2.25rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+    font-family: 'Google Sans', sans-serif;
+}
+
+.editor-content h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-top: 1.25rem;
+    margin-bottom: 0.5rem;
+    font-family: 'Google Sans', sans-serif;
+}
+
+.editor-content h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    font-family: 'Google Sans', sans-serif;
+}
+
+.editor-content ul {
+    list-style-type: disc;
+    padding-left: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.editor-content ol {
+    list-style-type: decimal;
+    padding-left: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.editor-content blockquote {
+    border-left: 4px solid #cbd5e1;
+    padding-left: 1rem;
+    color: #64748b;
+    font-style: italic;
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+}
+
+.dark .editor-content blockquote {
+    border-left-color: #475569;
+    color: #94a3b8;
+}
+
+.editor-content a {
+    color: #1a73e8;
+    text-decoration: underline;
+}
+
+.dark .editor-content a {
+    color: #8ab4f8;
+}
+
+.editor-content hr {
+    border-color: #e2e8f0;
+    margin: 1.5rem 0;
+}
+
+.dark .editor-content hr {
+    border-color: #334155;
+}
+
+.sidebar-logo-link {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.sidebar-logo-link:hover {
+    opacity: 0.8;
+}
+
+/* Contenteditable placeholder */
+[contenteditable]:empty:before {
+    content: attr(data-placeholder);
+    color: #94a3b8;
+    pointer-events: none;
+    display: block;
+}
+
+/* File tree item styles */
+.file-tree-item {
+    transition: all 0.15s ease;
+}
+
+.file-tree-item.active {
+    background-color: #c2e7ff;
+    color: #001d35;
+    font-weight: 500;
+}
+
+.dark .file-tree-item.active {
+    background-color: #004a77;
+    color: #c2e7ff;
+}
+
+/* Label marquee for overflow */
+.label-marquee-container {
+    position: relative;
+    overflow: hidden;
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.label-marquee {
+    display: inline-block;
+    white-space: nowrap;
+    animation: marquee 8s linear infinite;
+    animation-play-state: paused;
+    will-change: transform;
+}
+
+.label-marquee-container:hover .label-marquee,
+.label-marquee-container:focus .label-marquee,
+.touch-device .label-marquee {
+    animation-play-state: running;
+}
+
+@keyframes marquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-100%); }
+}
+
+.label-marquee-container::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to right, transparent, currentColor);
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.label-marquee-container:hover::after,
+.label-marquee-container:focus::after,
+.touch-device .label-marquee-container::after {
+    opacity: 0;
+}
+
+/* Touch device overrides */
+@media (hover: none) {
+    .theme-settings-btn {
+        opacity: 1 !important;
+    }
+}
+
+/* Status bar pulse animation */
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.saving-pulse {
+    animation: pulse-dot 1s ease-in-out infinite;
+}
+
+/* ── Sidebar modes ─────────────────────────────────────────── */
+#sidebar {
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                flex-shrink 0.3s ease;
+}
+
+/* Ocultar sidebar en móviles si no está expandido en pantalla completa */
+@media (max-width: 767px) {
+    #sidebar:not(.sidebar-expanded) {
+        display: none !important;
+    }
+}
+
+/* Modo expandido: sidebar ocupa toda la pantalla */
+#sidebar.sidebar-expanded {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    flex-shrink: 0;
+    border-right: none !important;
+    /* El aside mismo hace el scroll en modo expandido */
+    overflow-y: auto;
+    height: auto !important;
+    min-height: 100vh;
+}
+
+/* En modo expandido, el div interno no restringe la altura ni hace scroll propio */
+#sidebar.sidebar-expanded #sidebar-inner {
+    overflow: visible !important;
+    min-height: auto !important;
+    flex: none !important;
+}
+
+/* El árbol de entradas expandido tampoco tiene scroll propio */
+#sidebar.sidebar-expanded #expanded-file-tree {
+    overflow: visible !important;
+    flex: none !important;
+    max-height: none !important;
+}
+
+/* El panel de entradas expandido tampoco necesita flex-1 con altura acotada */
+#sidebar.sidebar-expanded #expanded-post-list {
+    flex: none !important;
+}
+
+/* El bottom actions en modo expandido no se posiciona "al fondo" con justify-between */
+#sidebar.sidebar-expanded {
+    justify-content: flex-start !important;
+    gap: 0;
+}
+
+/* Ocultar main cuando el sidebar está expandido */
+#main-workspace.sidebar-expanded-hide {
+    display: none !important;
+}
+
+/* Panel de lista de entradas en modo expandido */
+#expanded-post-list {
+    transition: opacity 0.2s ease;
+}
+
+/* Tarjetas de entradas en modo expanded */
+.expanded-post-card {
+    transition: all 0.15s ease;
+}
+.expanded-post-card:hover {
+    transform: translateX(4px);
+}
+
+/* Botón toggle sidebar */
+#sidebar-toggle-btn {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.2s ease;
+}
+#sidebar-toggle-btn .toggle-icon {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#sidebar-toggle-btn.sidebar-is-expanded .toggle-icon {
+    transform: rotate(180deg);
+}
+
+/* ── Estilos de Contenido Enriquecido (Markdown Equivalente) ── */
+#doc-content code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85em;
+    background-color: rgba(226, 232, 240, 0.5); /* Slate 200 con opacidad */
+    padding: 0.15rem 0.35rem;
+    border-radius: 0.375rem;
+    color: #db2777; /* Rosa oscuro */
+}
+
+.dark #doc-content code {
+    background-color: rgba(30, 41, 59, 0.6); /* Slate 800 con opacidad */
+    color: #f472b6; /* Rosa claro */
+}
+
+#doc-content pre {
+    background-color: #f8fafc; /* Slate 50 */
+    border: 1px solid #e2e8f0; /* Slate 200 */
+    padding: 1rem;
+    border-radius: 0.75rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+}
+
+.dark #doc-content pre {
+    background-color: #0f172a; /* Slate 900 */
+    border-color: #1e293b; /* Slate 800 */
+}
+
+#doc-content pre code {
+    background-color: transparent !important;
+    padding: 0 !important;
+    color: inherit !important;
+    font-size: 0.9em;
+}
+
+/* Tablas */
+#doc-content table {
+    width: 100%;
+    margin: 1.5rem 0;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+#doc-content th, #doc-content td {
+    border: 1px solid #e2e8f0;
+    padding: 0.75rem 1rem;
+}
+
+.dark #doc-content th, .dark #doc-content td {
+    border-color: #1e293b;
+}
+
+#doc-content th {
+    background-color: #f1f5f9;
+    font-weight: 600;
+    text-align: left;
+}
+
+.dark #doc-content th {
+    background-color: rgba(30, 41, 59, 0.6);
+}
+
+#doc-content tr:nth-child(even) {
+    background-color: #f8fafc;
+}
+
+.dark #doc-content tr:nth-child(even) {
+    background-color: rgba(15, 23, 42, 0.4);
+}
+
+/* Listas de tareas */
+.task-list-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+}
+
+.task-list-item input[type="checkbox"] {
+    margin-top: 0.3rem;
+}
+
+/* Barra de formato deslizable horizontalmente en pantallas pequeñas */
+@media (max-width: 640px) {
+    #editor-view .sticky {
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+        justify-content: flex-start !important;
+        -webkit-overflow-scrolling: touch;
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+    /* Ocultar barra de desplazamiento */
+    #editor-view .sticky::-webkit-scrollbar {
+        display: none;
+    }
+    #editor-view .sticky {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    /* Impedir encogimiento de botones y separadores */
+    #editor-view .sticky button, 
+    #editor-view .sticky div {
+        flex-shrink: 0 !important;
+    }
+}
+
+/* ============================================================
+   Estilos de Iconos y Fondos Personalizados
+   ============================================================ */
+
+/* Animación de apertura de modales */
+#icon-picker-backdrop:not(.hidden),
+#background-picker-backdrop:not(.hidden) {
+    animation: fadeIn 0.2s ease-out;
+}
+
+#icon-picker-backdrop:not(.hidden) #icon-picker-container,
+#background-picker-backdrop:not(.hidden) #background-picker-container {
+    animation: scaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+    from { transform: scale(0.9) translateY(10px); opacity: 0; }
+    to { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+/* Grilla de Emojis */
+.emoji-category-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8; /* slate-400 */
+    margin-bottom: 0.5rem;
+    margin-top: 1rem;
+}
+.dark .emoji-category-title {
+    color: #475569; /* slate-600 */
+}
+
+.emoji-grid {
+    display: grid;
+    grid-template-cols: repeat(8, 1fr);
+    gap: 0.25rem;
+}
+
+.emoji-item {
+    font-size: 1.5rem;
+    padding: 0.375rem;
+    border-radius: 0.5rem;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+
+.emoji-item:hover {
+    background-color: #f1f5f9; /* slate-100 */
+    transform: scale(1.15);
+}
+
+.dark .emoji-item:hover {
+    background-color: #334155; /* slate-700 */
+}
+
+/* Muestras de Colores Sólidos y Gradientes */
+.color-swatch {
+    aspect-ratio: 1;
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.06);
+}
+
+.color-swatch:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.color-swatch.active {
+    border-color: #1a73e8; /* Google Blue */
+    transform: scale(1.05);
+}
+
+.dark .color-swatch.active {
+    border-color: #8ab4f8; /* Google Blue Dark */
+}
+
+.gradient-swatch {
+    height: 3.5rem;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: flex;
+    align-items: flex-end;
+    padding: 0.5rem;
+}
+
+.gradient-swatch:hover {
+    transform: scale(1.05) translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.gradient-swatch.active {
+    border-color: #1a73e8;
+}
+
+.dark .gradient-swatch.active {
+    border-color: #8ab4f8;
+}
+
+.gradient-swatch span {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ============================================================
+   Legibilidad Contrastante en Fondos Personalizados
+   ============================================================ */
+
+/* Estado del editor con fondo personalizado */
+#editor-view.has-custom-bg {
+    transition: background 0.3s ease;
+}
+
+/* 1. Contraste de Texto Claro (Fondo Oscuro) */
+#editor-view.text-light-contrast {
+    color: #f1f5f9 !important; /* slate-100 */
+}
+
+#editor-view.text-light-contrast #doc-title {
+    color: #ffffff !important;
+}
+
+#editor-view.text-light-contrast #doc-title::placeholder {
+    color: rgba(255, 255, 255, 0.35) !important;
+}
+
+#editor-view.text-light-contrast #doc-content {
+    color: #e2e8f0 !important; /* slate-200 */
+}
+
+#editor-view.text-light-contrast #doc-content[data-placeholder]:empty::before {
+    color: rgba(255, 255, 255, 0.35) !important;
+}
+
+#editor-view.text-light-contrast .material-symbols-outlined {
+    color: #cbd5e1 !important; /* slate-300 */
+}
+
+/* Toolbar de formato adaptada a fondo oscuro */
+#editor-view.text-light-contrast .sticky {
+    background-color: rgba(15, 23, 42, 0.3) !important; /* slate-900 translúcido */
+    border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+#editor-view.text-light-contrast .sticky button {
+    color: #cbd5e1 !important;
+}
+
+#editor-view.text-light-contrast .sticky button:hover {
+    background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+#editor-view.text-light-contrast .sticky .w-px {
+    background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Barra de estado */
+#editor-view.text-light-contrast #status-bar {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* Chips de Etiquetas */
+#editor-view.text-light-contrast #post-labels-container {
+    border-color: rgba(255, 255, 255, 0.1) !important;
+}
+#editor-view.text-light-contrast #post-labels-container button {
+    color: #93c5fd !important; /* blue-300 */
+}
+#editor-view.text-light-contrast #post-labels-container button:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 2. Contraste de Texto Oscuro (Fondo Claro) */
+#editor-view.text-dark-contrast {
+    color: #1e293b !important; /* slate-800 */
+}
+
+#editor-view.text-dark-contrast #doc-title {
+    color: #0f172a !important; /* slate-900 */
+}
+
+#editor-view.text-dark-contrast #doc-title::placeholder {
+    color: rgba(15, 23, 42, 0.35) !important;
+}
+
+#editor-view.text-dark-contrast #doc-content {
+    color: #334155 !important; /* slate-700 */
+}
+
+#editor-view.text-dark-contrast #doc-content[data-placeholder]:empty::before {
+    color: rgba(15, 23, 42, 0.35) !important;
+}
+
+#editor-view.text-dark-contrast .material-symbols-outlined {
+    color: #475569 !important; /* slate-600 */
+}
+
+/* Toolbar de formato adaptada a fondo claro */
+#editor-view.text-dark-contrast .sticky {
+    background-color: rgba(255, 255, 255, 0.4) !important; /* blanco translúcido */
+    border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+#editor-view.text-dark-contrast .sticky button {
+    color: #475569 !important;
+}
+
+#editor-view.text-dark-contrast .sticky button:hover {
+    background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+#editor-view.text-dark-contrast .sticky .w-px {
+    background-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Barra de estado */
+#editor-view.text-dark-contrast #status-bar {
+    color: rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Chips de Etiquetas */
+#editor-view.text-dark-contrast #post-labels-container {
+    border-color: rgba(0, 0, 0, 0.08) !important;
+}
+#editor-view.text-dark-contrast #post-labels-container button {
+    color: #1a73e8 !important;
+}
+#editor-view.text-dark-contrast #post-labels-container button:hover {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+}

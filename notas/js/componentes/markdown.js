@@ -1,5 +1,14 @@
+const markdownCache = new Map();
+
+export function clearMarkdownCache() {
+    markdownCache.clear();
+}
+
 export function renderMarkdown(text) {
     if (!text) return '';
+    if (markdownCache.has(text)) {
+        return markdownCache.get(text);
+    }
     let html = escapeHtml(text);
     html = parseHorizontalRules(html);
     html = parseBold(html);
@@ -12,13 +21,17 @@ export function renderMarkdown(text) {
     html = parseBlockquote(html);
     html = parseCodeBlocks(html);
     html = parseLineBreaks(html);
+    markdownCache.set(text, html);
     return html;
 }
 
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function parseHorizontalRules(html) {

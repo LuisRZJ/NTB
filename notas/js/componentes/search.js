@@ -1,22 +1,29 @@
 import { state } from './state.js';
 import { refreshNotesView } from './renderer.js';
 
+let searchTimeout;
+
 export function handleSearch() {
     const input = document.getElementById('search-input');
     const clearBtn = document.getElementById('clear-search-btn');
     
     if (!input) return;
     
-    state.searchQuery = input.value;
+    const query = input.value;
 
     if (clearBtn) {
-        if (state.searchQuery.length > 0) {
+        if (query.length > 0) {
             clearBtn.classList.remove('hidden');
         } else {
             clearBtn.classList.add('hidden');
         }
     }
-    refreshNotesView();
+    
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        state.searchQuery = query;
+        refreshNotesView();
+    }, 250);
 }
 
 export function clearSearchInput() {

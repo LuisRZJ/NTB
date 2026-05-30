@@ -1,4 +1,4 @@
-import { state, getLabelsList, addLabel as addLabelToState, removeLabel as removeLabelFromState, setLabelsList } from './state.js';
+import { state, getLabelsList, addLabel as addLabelToState, removeLabel as removeLabelFromState, setLabelsList, getLabelColor } from './state.js';
 import { saveLabelsToStorage } from './storage.js';
 import { refreshNotesView } from './renderer.js';
 import { showToast } from './toast.js';
@@ -21,12 +21,12 @@ export function populateLabelSelectors() {
 
         labels.forEach(label => {
             const option = document.createElement('option');
-            option.value = label;
-            option.textContent = label;
+            option.value = label.name;
+            option.textContent = label.name;
             selector.appendChild(option);
         });
 
-        if (currentValue && labels.includes(currentValue)) {
+        if (currentValue && labels.some(l => l.name === currentValue)) {
             selector.value = currentValue;
         }
     });
@@ -51,32 +51,33 @@ export function renderSidebarLabels() {
 function createSidebarLabelButton(label, type) {
     const btn = document.createElement('div');
     btn.className = `label-nav-tab w-full flex items-center gap-2 px-4 py-2 rounded-full text-slate-600 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-xs [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff] group`;
-    btn.dataset.label = label;
+    btn.dataset.label = label.name;
 
     const labelBtn = document.createElement('button');
     labelBtn.className = 'flex items-center gap-3 flex-1 min-w-0';
     labelBtn.onclick = () => {
         if (type === 'mobile') {
-            filterByLabelMobile(label);
+            filterByLabelMobile(label.name);
         } else {
-            filterByLabelDesktop(label);
+            filterByLabelDesktop(label.name);
         }
     };
 
+    const iconStyle = label.color ? `style="color: ${label.color}"` : '';
     labelBtn.innerHTML = `
-        <span class="material-symbols-outlined text-sm shrink-0">label</span>
-        <span class="truncate">${label}</span>
+        <span class="material-symbols-outlined text-sm shrink-0" ${iconStyle}>label</span>
+        <span class="truncate">${label.name}</span>
     `;
 
     const actionsDiv = document.createElement('div');
-    actionsDiv.className = 'flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    actionsDiv.className = 'label-actions-div flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
 
     const editBtn = document.createElement('button');
     editBtn.className = 'p-1 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-full flex items-center justify-center';
     editBtn.title = 'Editar';
     editBtn.onclick = (e) => {
         e.stopPropagation();
-        openEditLabelDialog(label);
+        openEditLabelDialog(label.name);
     };
     editBtn.innerHTML = '<span class="material-symbols-outlined text-xs">edit</span>';
 
@@ -85,7 +86,7 @@ function createSidebarLabelButton(label, type) {
     deleteBtn.title = 'Eliminar';
     deleteBtn.onclick = (e) => {
         e.stopPropagation();
-        deleteLabel(label);
+        deleteLabel(label.name);
     };
     deleteBtn.innerHTML = '<span class="material-symbols-outlined text-xs">delete</span>';
 
@@ -132,6 +133,44 @@ function toggleMobileSidebar() {
     }
 }
 
+let selectedLabelColorValue = null;
+
+export function selectLabelColor(color, element) {
+    selectedLabelColorValue = color;
+    
+    const buttons = document.querySelectorAll('#label-color-choices button, #label-color-choices .relative');
+    buttons.forEach(btn => {
+        btn.classList.remove('ring-2', 'ring-google-blue', 'ring-offset-2', 'dark:ring-offset-[#202124]');
+    });
+    
+    if (element) {
+        element.classList.add('ring-2', 'ring-google-blue', 'ring-offset-2', 'dark:ring-offset-[#202124]');
+    }
+}
+
+function getContrastColor(hexColor) {
+    if (!hexColor || hexColor === 'null') return 'inherit';
+    const r = parseInt(hexColor.substr(1, 2), 16);
+    const g = parseInt(hexColor.substr(3, 2), 16);
+    const b = parseInt(hexColor.substr(5, 2), 16);
+    const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+    return (yiq >= 128) ? '#000000' : '#ffffff';
+}
+
+export function selectCustomLabelColor(color) {
+    selectedLabelColorValue = color;
+    
+    const customContainer = document.querySelector('#custom-label-color-input')?.parentElement;
+    if (customContainer) {
+        selectLabelColor(color, customContainer);
+        customContainer.style.backgroundColor = color;
+        const icon = customContainer.querySelector('span');
+        if (icon) {
+            icon.style.color = getContrastColor(color);
+        }
+    }
+}
+
 export function openLabelDialog() {
     const backdrop = document.getElementById('label-dialog-backdrop');
     const container = document.getElementById('label-dialog-container');
@@ -139,6 +178,18 @@ export function openLabelDialog() {
     const errorDiv = document.getElementById('label-error');
 
     if (!backdrop || !container) return;
+
+    selectedLabelColorValue = null;
+    const nullBtn = document.querySelector('#label-color-choices button[data-color="null"]');
+    selectLabelColor(null, nullBtn);
+
+    const customInput = document.getElementById('custom-label-color-input');
+    const customContainer = customInput?.parentElement;
+    if (customContainer) {
+        customContainer.style.backgroundColor = '';
+        const icon = customContainer.querySelector('span');
+        if (icon) icon.style.color = '';
+    }
 
     if (errorDiv) {
         errorDiv.classList.add('hidden');
@@ -197,7 +248,7 @@ export function createNewLabel() {
     }
 
     const labels = getLabelsList();
-    if (labels.some(l => l.toLowerCase() === labelName.toLowerCase())) {
+    if (labels.some(l => l.name.toLowerCase() === labelName.toLowerCase())) {
         if (errorDiv) {
             errorDiv.textContent = 'Ya existe una etiqueta con este nombre';
             errorDiv.classList.remove('hidden');
@@ -205,10 +256,18 @@ export function createNewLabel() {
         return;
     }
 
-    addLabelToState(labelName);
+    addLabelToState(labelName, selectedLabelColorValue);
     saveLabelsToStorage();
     populateLabelSelectors();
     renderSidebarLabels();
+    // Refrescar chips del dialog si está abierto
+    if (typeof window.renderDialogTagChips === 'function') {
+        const dialogOpen = !document.getElementById('note-dialog-backdrop')?.classList.contains('hidden');
+        if (dialogOpen) {
+            const activeTags = Array.from(document.querySelectorAll('.dialog-tag-chip[data-active="true"]')).map(c => c.dataset.tag);
+            window.renderDialogTagChips(activeTags);
+        }
+    }
     refreshNotesView();
     closeLabelDialog();
     showToast(`Etiqueta "${labelName}" creada correctamente`);
@@ -258,8 +317,8 @@ export function confirmDeleteLabel() {
     if (!labelToDelete) return;
 
     state.notes.forEach(note => {
-        if (note.label === labelToDelete) {
-            note.label = null;
+        if (Array.isArray(note.tags)) {
+            note.tags = note.tags.filter(t => t !== labelToDelete);
         }
     });
 
@@ -287,6 +346,33 @@ export function openEditLabelDialog(oldLabel) {
     const errorDiv = document.getElementById('label-error');
 
     if (!backdrop || !container) return;
+
+    const labelObj = getLabelsList().find(l => l.name === oldLabel);
+    const currentColor = labelObj ? labelObj.color : null;
+    selectedLabelColorValue = currentColor;
+
+    // Resetear estilos del contenedor de color personalizado
+    const customInput = document.getElementById('custom-label-color-input');
+    const customContainer = customInput?.parentElement;
+    if (customContainer) {
+        customContainer.style.backgroundColor = '';
+        const icon = customContainer.querySelector('span');
+        if (icon) icon.style.color = '';
+    }
+
+    // Seleccionar visualmente el botón de color correspondiente
+    if (currentColor === null) {
+        const nullBtn = document.querySelector('#label-color-choices button[data-color="null"]');
+        selectLabelColor(null, nullBtn);
+    } else {
+        const presetBtn = document.querySelector(`#label-color-choices button[data-color="${currentColor}"]`);
+        if (presetBtn) {
+            selectLabelColor(currentColor, presetBtn);
+        } else {
+            if (customInput) customInput.value = currentColor;
+            selectCustomLabelColor(currentColor);
+        }
+    }
 
     if (titleSpan) titleSpan.textContent = 'Editar Etiqueta';
     if (submitBtn) {
@@ -337,7 +423,7 @@ export function updateLabel() {
     }
 
     const labels = getLabelsList();
-    if (labels.some(l => l.toLowerCase() === newLabelName.toLowerCase() && l.toLowerCase() !== currentEditingLabel.toLowerCase())) {
+    if (labels.some(l => l.name.toLowerCase() === newLabelName.toLowerCase() && l.name.toLowerCase() !== currentEditingLabel.toLowerCase())) {
         if (errorDiv) {
             errorDiv.textContent = 'Ya existe una etiqueta con este nombre';
             errorDiv.classList.remove('hidden');
@@ -346,19 +432,33 @@ export function updateLabel() {
     }
 
     const noteUpdatePromises = state.notes.map(note => {
-        if (note.label === currentEditingLabel) {
-            note.label = newLabelName;
+        if (Array.isArray(note.tags) && note.tags.includes(currentEditingLabel)) {
+            note.tags = note.tags.map(t => t === currentEditingLabel ? newLabelName : t);
         }
         return Promise.resolve();
     });
 
     Promise.all(noteUpdatePromises).then(() => {
-        const newLabels = labels.map(l => l === currentEditingLabel ? newLabelName : l);
+        const newLabels = labels.map(l => {
+            if (l.name === currentEditingLabel) {
+                return { name: newLabelName, color: selectedLabelColorValue };
+            }
+            return l;
+        });
         setLabelsList(newLabels);
         saveLabelsToStorage();
         import('./storage.js').then(m => m.saveNotesToStorage());
         populateLabelSelectors();
         renderSidebarLabels();
+        // Refrescar chips del dialog si está abierto
+        if (typeof window.renderDialogTagChips === 'function') {
+            const currentChips = document.querySelectorAll('.dialog-tag-chip');
+            if (currentChips.length > 0) {
+                const activeTags = Array.from(document.querySelectorAll('.dialog-tag-chip[data-active="true"]')).map(c => c.dataset.tag);
+                const updatedActive = activeTags.map(t => t === currentEditingLabel ? newLabelName : t);
+                window.renderDialogTagChips(updatedActive);
+            }
+        }
         refreshNotesView();
         closeLabelDialog();
 
@@ -387,3 +487,5 @@ window.submitLabelDialog = submitLabelDialog;
 window.openDeleteLabelDialog = openDeleteLabelDialog;
 window.closeDeleteLabelDialog = closeDeleteLabelDialog;
 window.confirmDeleteLabel = confirmDeleteLabel;
+window.selectLabelColor = selectLabelColor;
+window.selectCustomLabelColor = selectCustomLabelColor;

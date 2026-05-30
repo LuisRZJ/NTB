@@ -3,7 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Keep - Material Design Notas</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <meta name="theme-color" content="#0f172a">
+    <script>
+        (function() {
+            try {
+                const mode = localStorage.getItem('theme_mode') || 'auto';
+                let isDark = false;
+                if (mode === 'dark') {
+                    isDark = true;
+                } else if (mode === 'auto') {
+                    const configStr = localStorage.getItem('auto_theme_config');
+                    let config = { mode: 'device' };
+                    if (configStr) {
+                        try { config = JSON.parse(configStr); } catch(e) {}
+                    }
+                    if (config.mode === 'device') {
+                        isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    } else if (config.mode === 'schedule') {
+                        const now = new Date();
+                        const currentTime = now.getHours() * 60 + now.getMinutes();
+                        const [fromH, fromM] = (config.schedules?.from || '18:00').split(':').map(Number);
+                        const [toH, toM] = (config.schedules?.to || '06:00').split(':').map(Number);
+                        const fromMinutes = fromH * 60 + fromM;
+                        const toMinutes = toH * 60 + toM;
+                        if (fromMinutes < toMinutes) {
+                            isDark = currentTime >= fromMinutes && currentTime < toMinutes;
+                        } else {
+                            isDark = currentTime >= fromMinutes || currentTime < toMinutes;
+                        }
+                    }
+                }
+                if (isDark) {
+                    document.documentElement.classList.add('dark');
+                    document.documentElement.classList.remove('light');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                    document.documentElement.classList.add('light');
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <title>NTB - Notas</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -38,21 +81,21 @@
     <!-- Custom Styles -->
     <link rel="stylesheet" href="notas/css/estilos.css">
 </head>
-<body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 min-h-screen transition-colors duration-300 overflow-hidden flex flex-col md:flex-row">
+<body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 h-screen max-h-screen transition-colors duration-300 overflow-hidden flex flex-col md:flex-row">
 
     <!-- Sidebar (Escritorio) -->
     <aside class="hidden md:flex flex-col w-64 xl:w-72 h-screen px-4 py-6 flex-shrink-0 bg-google-grayBg dark:bg-[#111318] justify-between border-r border-slate-200/50 dark:border-slate-800/50">
-        <div class="space-y-6">
+        <div class="flex flex-col gap-6 min-h-0 overflow-y-auto no-scrollbar">
             <!-- Brand / Logo -->
-            <div class="flex items-center gap-3 px-3">
+            <a href="index.html" class="sidebar-logo-link flex items-center gap-3 px-3">
                 <div class="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center shadow-md shadow-amber-500/20 text-white">
                     <span class="material-symbols-outlined text-2xl">lightbulb</span>
                 </div>
                 <div>
-                    <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-amber-500 to-orange-500 bg-clip-text text-transparent">Keep Notes</span>
+                    <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-amber-500 to-orange-500 bg-clip-text text-transparent">Notas</span>
                     <span class="text-xs block text-slate-500 dark:text-slate-400">Material You Design</span>
                 </div>
-            </div>
+            </a>
 
             <!-- Navigation Menu -->
             <nav class="space-y-1">
@@ -88,7 +131,7 @@
                         <span class="material-symbols-outlined text-sm">add</span>
                     </button>
                 </div>
-                <div id="side-labels-container" class="mt-2 space-y-0.5">
+                <div id="side-labels-container" class="mt-2 space-y-0.5 max-h-64 overflow-y-auto no-scrollbar pr-1">
                     <!-- Dynamic tag buttons -->
                 </div>
             </div>
@@ -99,20 +142,23 @@
             <!-- Theme Toggle Button -->
             <div class="relative group">
                 <button onclick="toggleTheme()" id="theme-toggle-btn" class="w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm">
-                    <span id="theme-toggle-icon" class="material-symbols-outlined">brightness_auto</span>
-                    <span id="theme-toggle-text">Automático</span>
+                    <span id="theme-toggle-icon" class="material-symbols-outlined theme-toggle-icon">brightness_auto</span>
+                    <span id="theme-toggle-text" class="theme-toggle-text">Automático</span>
                 </button>
-                <button onclick="openAutoThemeDialog()" id="theme-settings-btn" class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-full flex items-center justify-center transition-all duration-200" title="Configurar tema automático">
+                <button onclick="openAutoThemeDialog()" id="theme-settings-btn" class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-full flex items-center justify-center transition-all duration-200 theme-settings-btn" title="Configurar tema automático">
                     <span class="material-symbols-outlined text-sm">settings</span>
                 </button>
             </div>
-            <div class="flex items-center gap-3 p-3 bg-slate-200/40 dark:bg-[#1a1c1e] rounded-2xl">
-                <img class="w-9 h-9 rounded-full object-cover border-2 border-slate-300/50" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%231a73e8'/%3E%3Ccircle cx='50' cy='38' r='20' fill='%23fff'/%3E%3Cellipse cx='50' cy='90' rx='32' ry='26' fill='%23fff'/%3E%3C/svg%3E" alt="Profile" onerror="this.onerror=null;">
-                <div class="overflow-hidden">
-                    <p class="font-semibold text-xs truncate">Usuario Android</p>
-                    <p class="text-[10px] text-slate-400 truncate">demo@materialyou.com</p>
-                </div>
-            </div>
+            <!-- Metrics Button -->
+            <button onclick="switchTab('metrics')" id="side-tab-metrics" class="nav-tab w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">analytics</span>
+                <span>Estadísticas</span>
+            </button>
+            <!-- Settings Button -->
+            <button onclick="switchTab('settings')" id="side-tab-settings" class="nav-tab w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">storage</span>
+                <span>Ajustes de Datos</span>
+            </button>
         </div>
     </aside>
 
@@ -132,7 +178,7 @@
             </div>
 
             <!-- Material Search Bar -->
-            <div class="flex-1 max-w-2xl bg-google-grayBg dark:bg-[#2e3033] rounded-full px-4 py-2.5 flex items-center gap-3 shadow-sm hover:shadow-md focus-within:bg-white dark:focus-within:bg-[#202124] focus-within:ring-2 focus-within:ring-google-blue dark:focus-within:ring-google-blueDark transition-all duration-200">
+            <div id="search-bar-container" class="flex-1 max-w-2xl bg-google-grayBg dark:bg-[#2e3033] rounded-full px-4 py-2.5 flex items-center gap-3 shadow-sm hover:shadow-md focus-within:bg-white dark:focus-within:bg-[#202124] focus-within:ring-2 focus-within:ring-google-blue dark:focus-within:ring-google-blueDark transition-all duration-200">
                 <span class="material-symbols-outlined text-slate-500 dark:text-slate-400">search</span>
                 <input id="search-input" type="text" placeholder="Buscar tus notas, etiquetas o ideas..." oninput="handleSearch()" class="bg-transparent border-none outline-none w-full text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500">
                 <button onclick="clearSearch()" id="clear-search-btn" class="hidden text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
@@ -150,13 +196,28 @@
                     <span class="material-symbols-outlined dark:hidden">dark_mode</span>
                     <span class="material-symbols-outlined hidden dark:inline">light_mode</span>
                 </button>
-                <img class="w-8 h-8 rounded-full border border-slate-300/50 md:hidden" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%231a73e8'/%3E%3Ccircle cx='50' cy='38' r='20' fill='%23fff'/%3E%3Cellipse cx='50' cy='90' rx='32' ry='26' fill='%23fff'/%3E%3C/svg%3E" alt="Profile" onerror="this.onerror=null;">
             </div>
         </header>
 
         <!-- Content Container -->
-        <div class="flex-1 overflow-y-auto px-4 md:px-8 pb-32">
+        <div class="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 pb-32">
             
+            <!-- Birthday Banner -->
+            <div id="birthday-banner" class="hidden max-w-2xl mx-auto mb-6 bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 text-white rounded-3xl p-6 shadow-lg relative overflow-hidden transition-all duration-300">
+                <div class="absolute -right-8 -top-8 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
+                <div class="absolute -left-8 -bottom-8 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
+                
+                <div class="flex items-center gap-4 relative z-10">
+                    <div class="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-2xl animate-bounce">
+                        🎉
+                    </div>
+                    <div class="flex-1">
+                        <h2 class="text-base font-extrabold tracking-tight">¡Feliz Cumpleaños! 🎂</h2>
+                        <p class="text-xs text-white/90 mt-0.5">Te deseamos un excelente día lleno de alegría, éxito y muchas ideas geniales para anotar.</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Dynamic Category Chip Filter (Horizontal Scroller for Quick Filtering) -->
             <div id="category-filter-chips" class="flex gap-2 py-3 overflow-x-auto no-scrollbar scroll-smooth items-center mb-6">
                 <!-- Chips are rendered dynamically via Javascript -->
@@ -180,6 +241,397 @@
                 </div>
                 <div id="notes-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 transition-all duration-300">
                     <!-- Standard notes render here -->
+                </div>
+            </div>
+
+            <!-- Settings View (SPA panel) -->
+            <div id="settings-view" class="hidden max-w-2xl mx-auto bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/80 dark:border-slate-800/80 shadow-md p-6 sm:p-8 space-y-8 transition-all duration-300">
+                <div class="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+                    <span class="material-symbols-outlined text-3xl text-google-blue dark:text-google-blueDark">storage</span>
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Gestión de Datos (IndexedDB)</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Controla el almacenamiento de tus notas y etiquetas de forma local y segura.</p>
+                    </div>
+                </div>
+
+                <!-- Storage Statistics -->
+                <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">analytics</span>Estadísticas</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-white dark:bg-[#202124] p-4 rounded-xl border border-slate-200/40 dark:border-slate-800/30">
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Notas Guardadas</p>
+                            <p id="stats-notes-count" class="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">0</p>
+                        </div>
+                        <div class="bg-white dark:bg-[#202124] p-4 rounded-xl border border-slate-200/40 dark:border-slate-800/30">
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Etiquetas Creadas</p>
+                            <p id="stats-labels-count" class="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">0</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-center justify-between text-xs px-1">
+                        <span class="text-slate-500 dark:text-slate-400">Tamaño estimado de la base de datos:</span>
+                        <span id="stats-db-size" class="font-bold text-slate-700 dark:text-slate-300 font-mono">Calculando...</span>
+                    </div>
+                    <div id="stats-device-storage"></div>
+                </div>
+
+                <!-- Birthday Section -->
+                <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 space-y-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">cake</span>Cumpleaños</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Registra tu fecha de cumpleaños para recibir una sorpresa en tu día.</p>
+                    <div class="flex items-center gap-3">
+                        <div class="flex-1">
+                            <label for="birthday-month" class="text-[10px] font-bold uppercase text-slate-400 mb-1 block">Mes</label>
+                            <select id="birthday-month" onchange="saveBirthday()" class="w-full px-3 py-2 text-sm bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                                <option value="">Selecciona mes</option>
+                                <option value="01">Enero</option>
+                                <option value="02">Febrero</option>
+                                <option value="03">Marzo</option>
+                                <option value="04">Abril</option>
+                                <option value="05">Mayo</option>
+                                <option value="06">Junio</option>
+                                <option value="07">Julio</option>
+                                <option value="08">Agosto</option>
+                                <option value="09">Septiembre</option>
+                                <option value="10">Octubre</option>
+                                <option value="11">Noviembre</option>
+                                <option value="12">Diciembre</option>
+                            </select>
+                        </div>
+                        <div class="w-24">
+                            <label for="birthday-day" class="text-[10px] font-bold uppercase text-slate-400 mb-1 block">Día</label>
+                            <input type="number" id="birthday-day" min="1" max="31" placeholder="Día" oninput="saveBirthday()" class="w-full px-3 py-2 text-sm bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Backup & Restore Actions -->
+                <div class="space-y-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">cloud_download</span>Copias de Seguridad (Archivo Local)</h3>
+                    
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button onclick="exportData()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] hover:shadow-md transition-all">
+                            <span class="material-symbols-outlined text-lg">download</span>
+                            Exportar Notas (JSON)
+                        </button>
+                        
+                        <div class="flex-1 relative">
+                            <input type="file" id="import-file-input" accept=".json" class="hidden" onchange="importData(event)">
+                            <button onclick="document.getElementById('import-file-input').click()" class="w-full flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl border-2 border-google-blue/30 dark:border-google-blueDark/30 text-google-blue dark:text-google-blueDark hover:bg-google-blue/5 dark:hover:bg-google-blueDark/5 transition-all">
+                                <span class="material-symbols-outlined text-lg">upload</span>
+                                Importar Notas (JSON)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GitHub Sincronización -->
+                <div class="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                        <span class="material-symbols-outlined text-base">sync</span>Sincronización con GitHub (Cifrado Local)
+                    </h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Guarda tus notas de forma segura en un repositorio privado de GitHub. Las credenciales se almacenan cifradas localmente.</p>
+                    
+                    <div class="space-y-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label for="github-repo-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Repositorio (usuario/repo)</label>
+                                <input type="text" id="github-repo-input" placeholder="ej: LuisRZJ/ntb-backups" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-token-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Personal Access Token (PAT)</label>
+                                <input type="password" id="github-token-input" placeholder="ghp_..." class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                                <label for="github-branch-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Rama / Branch</label>
+                                <input type="text" id="github-branch-input" value="main" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-path-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Ruta del archivo</label>
+                                <input type="text" id="github-path-input" value="notas-backup.json" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-pass-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Contraseña Maestra de Cifrado</label>
+                                <input type="password" id="github-pass-input" placeholder="Clave para encriptar local" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center justify-between pt-2">
+                            <div id="github-status-badge" class="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-700"></span> Sin configurar
+                            </div>
+                            <button onclick="saveGithubSettings()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-xl hover:shadow-md transition-all">
+                                Guardar y Conectar
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Botones de Acción GitHub -->
+                    <div id="github-actions-container" class="hidden flex flex-col sm:flex-row gap-3 pt-3">
+                        <button id="btn-github-push" onclick="pushToGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
+                            <span class="material-symbols-outlined text-lg">cloud_upload</span>
+                            Respaldar en GitHub
+                        </button>
+                        <button id="btn-github-pull" onclick="pullFromGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
+                            <span class="material-symbols-outlined text-lg">cloud_download</span>
+                            Restaurar desde GitHub
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div class="pt-6 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-red-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">warning</span>Zona de Peligro</h3>
+                    <div class="bg-red-50 dark:bg-red-950/10 rounded-2xl p-5 border border-red-200/50 dark:border-red-900/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div class="space-y-1">
+                            <h4 class="text-sm font-bold text-red-700 dark:text-red-400">Restablecer aplicación</h4>
+                            <p class="text-xs text-red-600/80 dark:text-red-400/60 max-w-md">Eliminará permanentemente todas tus notas y etiquetas locales de IndexedDB y restaurará las notas de demostración originales.</p>
+                        </div>
+                        <button onclick="resetApplicationData()" class="w-full sm:w-auto px-5 py-2.5 text-xs font-bold bg-red-600 text-white hover:bg-red-700 rounded-2xl transition-all shadow-sm shrink-0">
+                            Restablecer Datos
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metrics View (SPA panel) -->
+            <div id="metrics-view" class="hidden max-w-4xl mx-auto bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/80 dark:border-slate-800/80 shadow-md p-6 sm:p-8 space-y-8 transition-all duration-300">
+                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-slate-100 dark:border-slate-800">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-3xl text-google-blue dark:text-google-blueDark">analytics</span>
+                        <div>
+                            <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Estadísticas y Métricas</h2>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Analiza tus hábitos de escritura, etiquetas y patrones de uso.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Period Filter Selector and Buttons -->
+                    <div class="flex flex-col items-end gap-2 w-full sm:w-auto">
+                        <select id="metrics-period-select" onchange="resetMetricsOffsetAndUpdate()" class="w-full sm:w-auto px-4 py-2 text-sm bg-slate-50 dark:bg-[#2e3033] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200 font-medium">
+                            <option value="7">Últimos 7 días</option>
+                            <option value="30" selected>Últimos 30 días</option>
+                            <option value="90">Últimos 90 días</option>
+                            <option value="all">Todo el historial</option>
+                            <option value="custom">Personalizado...</option>
+                        </select>
+                        
+                        <!-- Inputs for Custom Period (Hidden by default) -->
+                        <div id="metrics-custom-container" class="hidden flex items-center gap-1.5 w-full sm:w-auto justify-end">
+                            <input type="number" id="metrics-custom-value" min="1" value="5" oninput="resetMetricsOffsetAndUpdate()" class="w-16 px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#2e3033] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200 font-bold text-center">
+                            <select id="metrics-custom-unit" onchange="resetMetricsOffsetAndUpdate()" class="px-3 py-1.5 text-xs bg-slate-50 dark:bg-[#2e3033] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200 font-bold">
+                                <option value="days">Días</option>
+                                <option value="weeks" selected>Semanas</option>
+                                <option value="months">Meses</option>
+                                <option value="years">Años</option>
+                            </select>
+                        </div>
+                        
+                        <!-- Simple Nav Buttons -->
+                        <div class="flex flex-col items-end gap-1 w-full sm:w-auto">
+                            <div class="flex flex-col sm:flex-row items-end sm:items-center gap-2 w-full sm:w-auto justify-end">
+                                <span id="metrics-period-range" class="text-[11px] font-bold text-slate-400 dark:text-slate-500 select-none order-last sm:order-first"></span>
+                                <div class="flex items-center gap-2 w-full sm:w-auto justify-end" id="metrics-navigation-container">
+                                    <button id="metrics-prev-btn" onclick="navigateMetricsPeriod(-1)" class="flex-1 sm:flex-initial flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                                        <span class="material-symbols-outlined text-sm">chevron_left</span> Anterior
+                                    </button>
+                                    <button id="metrics-next-btn" onclick="navigateMetricsPeriod(1)" class="flex-1 sm:flex-initial flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                                        Siguiente <span class="material-symbols-outlined text-sm">chevron_right</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Period Comparison Status -->
+                            <div id="metrics-period-comparison" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 select-none mt-0.5"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Resumen General KPIs -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <!-- Tarjeta 1: Antigüedad de Notas -->
+                    <div id="metrics-first-note-card" class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-2xl bg-google-blue/10 dark:bg-google-blueDark/10 text-google-blue dark:text-google-blueDark flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-2xl">history</span>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">Antigüedad de Notas</p>
+                            <p id="metrics-first-note-date" class="text-sm font-bold text-slate-700 dark:text-slate-300 mt-0.5">Calculando...</p>
+                            <p id="metrics-time-elapsed" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Calculando...</p>
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta 2: Racha Semanal -->
+                    <div id="metrics-streak-card" class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between gap-3">
+                        <div class="flex items-center justify-between gap-4">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-2xl">local_fire_department</span>
+                                </div>
+                                <div class="flex-1">
+                                    <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">Racha de Escritura</p>
+                                    <p id="metrics-streak-count" class="text-sm font-bold text-slate-700 dark:text-slate-300 mt-0.5">Calculando...</p>
+                                </div>
+                            </div>
+                            <button onclick="toggleStreakHistory()" class="px-2.5 py-1.5 text-xs font-bold text-google-blue dark:text-google-blueDark hover:bg-slate-200/50 dark:hover:bg-slate-800/60 rounded-xl transition-all flex items-center gap-0.5 select-none shrink-0">
+                                Historial <span id="streak-arrow-icon" class="material-symbols-outlined text-sm transition-transform duration-200">keyboard_arrow_down</span>
+                            </button>
+                        </div>
+                        <!-- Historial Desplegable de Rachas -->
+                        <div id="metrics-streak-history" class="hidden border-t border-slate-200/50 dark:border-slate-800/50 pt-3 mt-1 text-xs text-slate-500 dark:text-slate-400 space-y-1.5 max-h-[120px] overflow-y-auto pr-1 no-scrollbar">
+                            <!-- Dynamically loaded -->
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta 3: Tiempos de Uso (Global) -->
+                    <div id="metrics-time-card" class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-2xl">schedule</span>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">Tiempo de Uso</p>
+                            <p id="metrics-total-usage-time" class="text-sm font-bold text-slate-700 dark:text-slate-300 mt-0.5">Calculando...</p>
+                            <p id="metrics-avg-session-time" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Sesión: Calculando...</p>
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta 4: Productividad del Período (Variable) -->
+                    <div id="metrics-productivity-card" class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-2xl">speed</span>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">Productividad del Período</p>
+                            <p id="metrics-period-average" class="text-sm font-bold text-slate-700 dark:text-slate-300 mt-0.5">Calculando...</p>
+                            <p id="metrics-active-time-range" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Pico: Calculando...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recuerdos y Acontecimientos -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="metrics-recuerdos-container">
+                    <!-- Tarjeta 1: Nota del Día -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between gap-3 min-h-[140px]">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3 flex items-center gap-1.5 select-none">
+                                <span class="material-symbols-outlined text-base text-amber-500">casino</span>Nota del Día
+                            </h3>
+                            <div id="metrics-note-of-the-day" class="p-3 bg-white dark:bg-[#202124] rounded-xl border border-slate-200/40 dark:border-slate-800/30 text-xs font-semibold cursor-pointer hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-all duration-200 group active:scale-[0.98]">
+                                <!-- Dynamically loaded -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta 2: Un día como hoy -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between gap-3 min-h-[140px]">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3 flex items-center gap-1.5 select-none">
+                                <span class="material-symbols-outlined text-base text-google-blue dark:text-google-blueDark">auto_awesome</span>Un día como hoy (Años anteriores)
+                            </h3>
+                            <div id="metrics-on-this-day" class="p-3 bg-white dark:bg-[#202124] rounded-xl border border-slate-200/40 dark:border-slate-800/30 text-xs font-semibold cursor-pointer hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-all duration-200 group active:scale-[0.98]">
+                                <!-- Dynamically loaded -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State Message for selected period -->
+                <div id="metrics-empty-message" class="hidden flex flex-col items-center justify-center py-12 text-center bg-slate-50/50 dark:bg-slate-900/10 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+                    <span class="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-600 mb-2">search_off</span>
+                    <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300 mb-1">Sin notas en este período</h3>
+                    <p class="text-xs text-slate-400 dark:text-slate-500 max-w-xs px-4">No hay notas guardadas o creadas en este intervalo. Intenta navegar a otro período o cambiar el filtro.</p>
+                </div>
+
+                <!-- Metrics Charts Container -->
+                <div id="metrics-charts-container" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Distribution by State -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-base">fact_check</span>Estado de Notas
+                            </h3>
+                            <div id="metrics-state-container" class="space-y-4">
+                                <!-- Horizontal bars -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Distribution by Label -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-base">label</span>Distribución por Etiqueta
+                            </h3>
+                            <div id="metrics-label-container" class="space-y-4 max-h-[220px] overflow-y-auto pr-1 no-scrollbar">
+                                <!-- Horizontal bars -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Distribution by Color -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-base">palette</span>Distribución de Colores
+                            </h3>
+                            <div id="metrics-color-container" class="space-y-4 max-h-[220px] overflow-y-auto pr-1 no-scrollbar">
+                                <!-- Horizontal bars -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Content Metrics -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-base">menu_book</span>Estadísticas de Escritura
+                            </h3>
+                            <div id="metrics-word-container" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <!-- Content stats grid -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Activity Heatmap Section (Always visible) -->
+                <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 space-y-4 pt-6">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                            <span class="material-symbols-outlined text-base">calendar_month</span>Mapa de Actividad (Últimas 12 Semanas)
+                        </h3>
+                        <div class="flex items-center gap-2 text-[10px] text-slate-400 dark:text-slate-500 font-semibold self-end sm:self-auto">
+                            <span>Menos</span>
+                            <span class="w-2.5 h-2.5 rounded bg-slate-200 dark:bg-slate-800"></span>
+                            <span class="w-2.5 h-2.5 rounded bg-blue-200 dark:bg-blue-900/40"></span>
+                            <span class="w-2.5 h-2.5 rounded bg-blue-400 dark:bg-blue-800/70"></span>
+                            <span class="w-2.5 h-2.5 rounded bg-blue-600 dark:bg-blue-600"></span>
+                            <span>Más</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Scrollable heatmap container -->
+                    <div class="overflow-x-auto pb-2 pt-1 no-scrollbar flex justify-center">
+                        <div class="flex gap-2">
+                            <!-- Weekdays column labels -->
+                            <div class="grid grid-rows-7 gap-1 text-[9px] font-bold text-slate-400 dark:text-slate-600 pr-1 h-[122px] select-none justify-items-end">
+                                <div>Dom</div>
+                                <div></div>
+                                <div>Mar</div>
+                                <div></div>
+                                <div>Jue</div>
+                                <div></div>
+                                <div>Sáb</div>
+                            </div>
+                            
+                            <!-- Heatmap Grid -->
+                            <div id="heatmap-grid" class="flex gap-1">
+                                <!-- Dynamically generated grid columns -->
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Cell detail for mobile/desktop touch interaction -->
+                    <div id="heatmap-cell-detail" class="text-[11px] font-bold text-slate-500 dark:text-slate-400 text-center mt-2 h-4 select-none">
+                        Toca una celda para ver el detalle de actividad diaria.
+                    </div>
                 </div>
             </div>
 
@@ -215,7 +667,7 @@
     </div>
 
     <!-- Floating Action Button (FAB) -->
-    <button onclick="openFullEditor()" class="fixed right-6 bottom-20 md:bottom-6 z-50 w-14 h-14 rounded-2xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 active:rounded-full transition-all duration-300" title="Nueva Nota">
+    <button onclick="openFullEditor()" id="fab-create-note" class="fixed right-6 bottom-20 md:bottom-6 z-50 w-14 h-14 rounded-2xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 active:rounded-full transition-all duration-300" title="Nueva Nota">
         <span class="material-symbols-outlined text-3xl">add</span>
     </button>
 
@@ -224,11 +676,11 @@
 
     <!-- Mobile Sidebar Drawer -->
     <div id="mobile-sidebar" class="fixed top-0 bottom-0 left-0 w-72 bg-google-grayBg dark:bg-[#111318] z-50 transform -translate-x-full transition-transform duration-300 p-6 flex flex-col justify-between rounded-r-3xl shadow-2xl">
-        <div class="space-y-6">
+        <div class="flex flex-col gap-6 min-h-0 overflow-y-auto no-scrollbar">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
                     <div class="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center text-white font-bold"><span class="material-symbols-outlined text-lg">lightbulb</span></div>
-                    <span class="font-bold text-base text-slate-800 dark:text-slate-200">Keep Notes</span>
+                    <span class="font-bold text-base text-slate-800 dark:text-slate-200">Notas</span>
                 </div>
                 <button onclick="toggleMobileSidebar()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full flex"><span class="material-symbols-outlined text-lg">arrow_back</span></button>
             </div>
@@ -254,17 +706,33 @@
                         <span class="material-symbols-outlined text-sm">add</span>
                     </button>
                 </div>
-                <div id="mob-labels-container" class="mt-2 space-y-0.5">
+                <div id="mob-labels-container" class="mt-2 space-y-0.5 max-h-52 overflow-y-auto no-scrollbar pr-1">
                     <!-- Dynamic tag buttons for mobile drawer -->
                 </div>
             </div>
         </div>
-        <div class="p-3 bg-slate-200/40 dark:bg-[#1a1c1e] rounded-2xl flex items-center gap-3">
-            <img class="w-8 h-8 rounded-full border border-slate-300" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%231a73e8'/%3E%3Ccircle cx='50' cy='38' r='20' fill='%23fff'/%3E%3Cellipse cx='50' cy='90' rx='32' ry='26' fill='%23fff'/%3E%3C/svg%3E" alt="Profile" onerror="this.onerror=null;">
-            <div class="overflow-hidden">
-                <p class="font-semibold text-xs truncate">Usuario Android</p>
-                <p class="text-[10px] text-slate-400 truncate">demo@materialyou.com</p>
+        <!-- Settings & Account Area (Bottom of Mobile Sidebar) -->
+        <div class="space-y-4">
+            <!-- Theme Toggle Button -->
+            <div class="relative group">
+                <button onclick="toggleTheme()" class="theme-toggle-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm">
+                    <span class="material-symbols-outlined theme-toggle-icon">brightness_auto</span>
+                    <span class="theme-toggle-text">Automático</span>
+                </button>
+                <button onclick="openAutoThemeDialog()" class="theme-settings-btn absolute right-3 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-full flex items-center justify-center transition-all duration-200" title="Configurar tema automático">
+                    <span class="material-symbols-outlined text-sm">settings</span>
+                </button>
             </div>
+            <!-- Metrics Button -->
+            <button onclick="switchTab('metrics'); toggleMobileSidebar();" class="mob-drawer-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">analytics</span>
+                <span>Estadísticas</span>
+            </button>
+            <!-- Settings Button -->
+            <button onclick="switchTab('settings'); toggleMobileSidebar();" class="mob-drawer-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">storage</span>
+                <span>Ajustes de Datos</span>
+            </button>
         </div>
     </div>
 
@@ -306,7 +774,7 @@
 
             <!-- Note configuration options (Colors & Labels) -->
             <div id="dialog-footer" class="px-6 py-4 bg-slate-50 dark:bg-[#1a1c1e] border-t border-slate-100 dark:border-slate-800 space-y-4">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="flex flex-col gap-4">
                     <!-- Colors Palette Selector -->
                     <div>
                         <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Color de fondo</p>
@@ -320,16 +788,16 @@
                         </div>
                     </div>
 
-                    <!-- Label Selector -->
-                    <div>
-                        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Asignar Etiqueta</p>
-                        <div class="flex items-center gap-1">
-                            <select id="dialog-note-label" class="text-xs bg-white dark:bg-[#2d2f31] border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-full px-4 py-1.5 outline-none font-medium max-w-[120px]">
-                                <option value="">Ninguna</option>
-                            </select>
-                            <button type="button" onclick="openLabelDialog()" class="p-1.5 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full flex items-center justify-center" title="Crear etiqueta">
-                                <span class="material-symbols-outlined text-base">add</span>
+                    <!-- Tags Multi-Select -->
+                    <div class="w-full">
+                        <div class="flex items-center justify-between mb-2">
+                            <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Etiquetas</p>
+                            <button type="button" onclick="openLabelDialog()" class="p-1 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full flex items-center justify-center" title="Crear etiqueta">
+                                <span class="material-symbols-outlined text-sm">add</span>
                             </button>
+                        </div>
+                        <div id="dialog-tags-chips" class="flex flex-wrap gap-1.5 min-h-[28px]">
+                            <!-- Chips generados dinámicamente por renderDialogTagChips() -->
                         </div>
                     </div>
                 </div>
@@ -361,6 +829,28 @@
                 <div>
                     <label for="new-label-name" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Nombre de la etiqueta</label>
                     <input id="new-label-name" type="text" placeholder="Ej: Viajes, Compras, Proyectos..." onkeydown="if(event.key==='Enter')submitLabelDialog()" class="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#2d2f31] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue dark:focus:ring-google-blueDark text-slate-800 dark:text-slate-200 placeholder-slate-400">
+                </div>
+                <div>
+                    <label class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Color de la etiqueta</label>
+                    <div class="flex flex-wrap items-center gap-2" id="label-color-choices">
+                        <button onclick="selectLabelColor(null, this)" class="w-7 h-7 rounded-full border-2 border-slate-300 dark:border-slate-700 bg-transparent flex items-center justify-center transition-transform hover:scale-110 active:scale-95" title="Sin color" data-color="null">
+                            <span class="material-symbols-outlined text-xs text-slate-400">block</span>
+                        </button>
+                        <button onclick="selectLabelColor('#ef4444', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#ef4444] transition-transform hover:scale-110 active:scale-95" title="Rojo" data-color="#ef4444"></button>
+                        <button onclick="selectLabelColor('#f97316', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#f97316] transition-transform hover:scale-110 active:scale-95" title="Naranja" data-color="#f97316"></button>
+                        <button onclick="selectLabelColor('#f59e0b', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#f59e0b] transition-transform hover:scale-110 active:scale-95" title="Amarillo" data-color="#f59e0b"></button>
+                        <button onclick="selectLabelColor('#10b981', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#10b981] transition-transform hover:scale-110 active:scale-95" title="Verde" data-color="#10b981"></button>
+                        <button onclick="selectLabelColor('#14b8a6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#14b8a6] transition-transform hover:scale-110 active:scale-95" title="Menta" data-color="#14b8a6"></button>
+                        <button onclick="selectLabelColor('#3b82f6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#3b82f6] transition-transform hover:scale-110 active:scale-95" title="Azul" data-color="#3b82f6"></button>
+                        <button onclick="selectLabelColor('#6366f1', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#6366f1] transition-transform hover:scale-110 active:scale-95" title="Índigo" data-color="#6366f1"></button>
+                        <button onclick="selectLabelColor('#8b5cf6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#8b5cf6] transition-transform hover:scale-110 active:scale-95" title="Púrpura" data-color="#8b5cf6"></button>
+                        <button onclick="selectLabelColor('#ec4899', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#ec4899] transition-transform hover:scale-110 active:scale-95" title="Rosa" data-color="#ec4899"></button>
+                        
+                        <div class="relative w-7 h-7 rounded-full border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex items-center justify-center hover:scale-110 active:scale-95 cursor-pointer overflow-hidden" title="Color personalizado">
+                            <span class="material-symbols-outlined text-sm text-slate-500">palette</span>
+                            <input type="color" id="custom-label-color-input" onchange="selectCustomLabelColor(this.value)" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                        </div>
+                    </div>
                 </div>
                 <div id="label-error" class="hidden text-xs text-red-500 dark:text-red-400"></div>
             </div>
@@ -487,12 +977,84 @@
         </div>
     </div>
 
+    <!-- Reset App Confirmation Dialog -->
+    <div id="reset-db-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="reset-db-dialog-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4">
+                <div class="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-red-500">warning</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Restablecer aplicación</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">¿Estás completamente seguro? Esto eliminará de forma permanente todas tus notas y etiquetas locales de IndexedDB, dejándola completamente limpia y vacía.</p>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800">
+                <button onclick="closeResetDbDialog()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button onclick="confirmResetApplicationData()" id="reset-db-confirm-btn" class="px-5 py-2 text-xs font-bold bg-red-500 hover:bg-red-600 text-white rounded-full transition-all">Restablecer</button>
+            </div>
+        </div>
+    </div>
+
+    </div>
+
+    <!-- GitHub Decrypt Configuration Dialog -->
+    <div id="github-decrypt-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="github-decrypt-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <div class="w-10 h-10 rounded-full bg-google-blue/10 dark:bg-google-blueDark/10 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-google-blue dark:text-google-blueDark">lock_open</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Sincronización con GitHub</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.</p>
+                </div>
+            </div>
+            <div class="p-5">
+                <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña maestra de cifrado" onkeydown="if(event.key==='Enter') submitGithubDecrypt()" class="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                <div id="github-decrypt-error" class="text-xs text-red-500 mt-2 hidden">Contraseña incorrecta</div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <button onclick="skipGithubDecrypt()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Trabajar en Local</button>
+                <button onclick="submitGithubDecrypt()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Iniciar Sincronización</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub Update Cloud Backup Dialog -->
+    <div id="github-update-backdrop" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="github-update-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <div class="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-amber-500">update</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Actualización en la Nube</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Se detectaron datos más recientes en tu repositorio de GitHub.</p>
+                </div>
+            </div>
+            <div class="p-5 space-y-3">
+                <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Tus notas locales están desactualizadas respecto a la última versión respaldada. Para evitar conflictos, debes decidir si importar los cambios remotos o mantener tus notas locales (los datos locales pisarán el servidor en tu siguiente respaldo).
+                </p>
+                <div class="bg-amber-50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-900/30 rounded-xl p-3 text-[10px] text-amber-700 dark:text-amber-400 leading-snug">
+                    <strong>¡Atención!</strong> La opción "Restaurar" reemplazará por completo tu base de datos IndexedDB local por los datos del repositorio de GitHub.
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <button onclick="skipGithubUpdate()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Conservar locales</button>
+                <button onclick="confirmGithubPull()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Restaurar de la Nube</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Android-Style Toast Notification / Snackbar -->
-    <div id="toast-container" class="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-50 transform translate-y-20 opacity-0 transition-all duration-300 ease-out flex items-center justify-between gap-4 px-5 py-3 rounded-2xl bg-slate-900 dark:bg-slate-200 text-slate-100 dark:text-slate-900 shadow-xl max-w-sm w-[calc(100%-2rem)]">
+    <div id="toast-container" class="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-50 transform translate-y-20 opacity-0 transition-all duration-300 ease-out flex items-center justify-between gap-4 px-5 py-3 rounded-2xl bg-slate-900 dark:bg-slate-200 text-slate-100 dark:text-slate-900 shadow-xl max-w-sm w-[calc(100%-2rem)] pointer-events-none">
         <span id="toast-message" class="text-xs font-medium">Nota guardada correctamente</span>
         <button id="toast-action" class="text-xs font-extrabold uppercase text-[#c2e7ff] dark:text-google-blue tracking-wider shrink-0 hover:brightness-110 active:opacity-70 transition-all">Deshacer</button>
     </div>
 
     <script type="module" src="notas/js/app.js"></script>
+    <script src="sw-register.js"></script>
 </body>
 </html>

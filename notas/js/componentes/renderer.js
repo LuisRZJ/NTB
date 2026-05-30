@@ -1,9 +1,14 @@
-import { state, colorPalette, getLabelsList } from './state.js';
+import { state, colorPalette, getLabelsList, getLabelColor } from './state.js';
 import { saveNotesToStorage } from './storage.js';
 import { toggleLayoutStyles } from './layout.js';
 import { showToast } from './toast.js';
 import { updateBadgesCounts } from './badges.js';
 import { renderMarkdown } from './markdown.js';
+
+let activeOtherNotes = [];
+let currentLimit = 24;
+const BATCH_SIZE = 24;
+let isScrollHandlerAttached = false;
 
 export function formatDate(timestamp) {
     if (!timestamp) return '';
@@ -71,8 +76,69 @@ export function refreshNotesView() {
     const pinnedSection = document.getElementById('pinned-section');
     const otherSectionTitle = document.getElementById('others-section-title');
     const emptyState = document.getElementById('empty-state');
+    const settingsView = document.getElementById('settings-view');
+    const metricsView = document.getElementById('metrics-view');
+    const quickNoteContainer = document.getElementById('quick-note-container');
+    const categoryChips = document.getElementById('category-filter-chips');
 
     if (!notesGrid || !pinnedGrid) return;
+
+    if (state.currentTab === 'settings') {
+        notesGrid.innerHTML = '';
+        pinnedGrid.innerHTML = '';
+        pinnedSection?.classList.add('hidden');
+        otherSectionTitle?.classList.add('hidden');
+        emptyState?.classList.add('hidden');
+        
+        quickNoteContainer?.classList.add('hidden');
+        categoryChips?.classList.add('hidden');
+        metricsView?.classList.add('hidden');
+        settingsView?.classList.remove('hidden');
+
+        document.getElementById('fab-create-note')?.classList.add('hidden');
+        document.getElementById('search-bar-container')?.classList.add('hidden');
+        document.getElementById('layout-toggle-btn')?.classList.add('hidden');
+
+        if (window.loadSettingsStats) {
+            window.loadSettingsStats();
+        }
+        
+        updateBadgesCounts();
+        return;
+    }
+
+    if (state.currentTab === 'metrics') {
+        notesGrid.innerHTML = '';
+        pinnedGrid.innerHTML = '';
+        pinnedSection?.classList.add('hidden');
+        otherSectionTitle?.classList.add('hidden');
+        emptyState?.classList.add('hidden');
+        
+        quickNoteContainer?.classList.add('hidden');
+        categoryChips?.classList.add('hidden');
+        settingsView?.classList.add('hidden');
+        metricsView?.classList.remove('hidden');
+
+        document.getElementById('fab-create-note')?.classList.add('hidden');
+        document.getElementById('search-bar-container')?.classList.add('hidden');
+        document.getElementById('layout-toggle-btn')?.classList.add('hidden');
+
+        if (window.updateMetricsView) {
+            window.updateMetricsView();
+        }
+        
+        updateBadgesCounts();
+        return;
+    }
+
+    settingsView?.classList.add('hidden');
+    metricsView?.classList.add('hidden');
+    quickNoteContainer?.classList.remove('hidden');
+    categoryChips?.classList.remove('hidden');
+
+    document.getElementById('fab-create-note')?.classList.remove('hidden');
+    document.getElementById('search-bar-container')?.classList.remove('hidden');
+    document.getElementById('layout-toggle-btn')?.classList.remove('hidden');
 
     notesGrid.innerHTML = '';
     pinnedGrid.innerHTML = '';
@@ -82,8 +148,8 @@ export function refreshNotesView() {
             const query = state.searchQuery.toLowerCase();
             const inTitle = note.title && note.title.toLowerCase().includes(query);
             const inContent = note.content && note.content.toLowerCase().includes(query);
-            const inLabel = note.label && note.label.toLowerCase().includes(query);
-            if (!inTitle && !inContent && !inLabel) return false;
+            const inTags = Array.isArray(note.tags) && note.tags.some(t => t.toLowerCase().includes(query));
+            if (!inTitle && !inContent && !inTags) return false;
         }
 
         if (state.currentTab === 'notes') {
@@ -95,7 +161,7 @@ export function refreshNotesView() {
         } else if (state.currentTab === 'trash') {
             return note.isTrash;
         } else if (state.currentTab === 'tag') {
-            return note.label === state.selectedLabelFilter && !note.isTrash && !note.isArchived;
+            return (note.tags || []).includes(state.selectedLabelFilter) && !note.isTrash && !note.isArchived;
         }
         return true;
     }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -112,6 +178,9 @@ export function refreshNotesView() {
         otherNotes = filtered;
     }
 
+    activeOtherNotes = otherNotes;
+    currentLimit = BATCH_SIZE;
+
     if (pinnedNotes.length > 0) {
         pinnedSection?.classList.remove('hidden');
         otherSectionTitle?.classList.remove('hidden');
@@ -122,7 +191,7 @@ export function refreshNotesView() {
     }
 
     if (otherNotes.length > 0) {
-        renderNotesWithDateSeparators(notesGrid, otherNotes);
+        renderNotesWithDateSeparators(notesGrid, otherNotes.slice(0, currentLimit));
     }
 
     if (filtered.length === 0) {
@@ -134,21 +203,45 @@ export function refreshNotesView() {
     toggleLayoutStyles();
     renderCategoryFilterChips();
     updateBadgesCounts();
+    if (window.checkBirthday) window.checkBirthday();
+    attachScrollLoadMore();
+}
+
+function attachScrollLoadMore() {
+    if (isScrollHandlerAttached) return;
+    window.addEventListener('scroll', () => {
+        if (state.currentTab === 'settings' || state.currentTab === 'metrics') return;
+        
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 500) {
+            if (currentLimit < activeOtherNotes.length) {
+                currentLimit += BATCH_SIZE;
+                const notesGrid = document.getElementById('notes-grid');
+                if (notesGrid) {
+                    notesGrid.innerHTML = '';
+                    renderNotesWithDateSeparators(notesGrid, activeOtherNotes.slice(0, currentLimit));
+                }
+            }
+        }
+    });
+    isScrollHandlerAttached = true;
 }
 
 export function renderNotesWithDateSeparators(container, notes) {
     let lastDateLabel = null;
+    const fragment = document.createDocumentFragment();
 
     notes.forEach((note, index) => {
         const currentDateLabel = getDateGroupLabel(note.createdAt);
 
         if (currentDateLabel !== lastDateLabel) {
-            container.appendChild(createDateSeparator(currentDateLabel));
+            fragment.appendChild(createDateSeparator(currentDateLabel));
             lastDateLabel = currentDateLabel;
         }
 
-        container.appendChild(createNoteCard(note));
+        fragment.appendChild(createNoteCard(note));
     });
+    
+    container.appendChild(fragment);
 }
 
 export function createNoteCard(note) {
@@ -181,12 +274,20 @@ export function createNoteCard(note) {
         </div>
 
         <div class="flex items-center justify-between mt-auto pt-2 border-t border-slate-200/40 dark:border-slate-800/20">
-            <div class="flex items-center gap-2 min-w-0">
-                ${note.label ? `
-                    <span class="label-marquee-container text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-300 max-w-[120px]" title="${note.label}" onclick="event.stopPropagation()">
-                        <span class="label-marquee">${note.label}</span>
-                    </span>
-                ` : ''}
+            <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
+                ${(() => {
+                    const noteTags = Array.isArray(note.tags) ? note.tags : [];
+                    if (noteTags.length === 0) return '';
+                    const visible = noteTags.slice(0, 2);
+                    const extra = noteTags.length - visible.length;
+                    const pills = visible.map(t => {
+                        const color = getLabelColor(t);
+                        const style = color ? `style="background-color: ${color}1a; color: ${color}; border: 1px solid ${color}33;"` : '';
+                        return `<span class="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-slate-600 dark:text-slate-300 shrink-0 max-w-[80px] truncate" ${style} title="${t}" onclick="event.stopPropagation()">${t}</span>`;
+                    }).join('');
+                    const extraPill = extra > 0 ? `<span class="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-slate-500 dark:text-slate-400 shrink-0">+${extra}</span>` : '';
+                    return pills + extraPill;
+                })()}
                 <span class="text-[10px] text-slate-400 dark:text-slate-500 shrink-0" title="${createdDate}">
                     ${createdDate}${editedDate ? ' · Editada' : ''}
                 </span>
@@ -239,10 +340,38 @@ export function renderCategoryFilterChips() {
 
     getLabelsList().forEach(lbl => {
         const btn = document.createElement('button');
-        btn.onclick = () => filterByLabel(lbl);
-        const isActive = (state.currentTab === 'tag' && state.selectedLabelFilter === lbl);
-        btn.className = `px-4 py-1.5 rounded-full text-xs font-semibold shrink-0 transition-all ${isActive ? 'bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] shadow-sm' : 'bg-slate-200/60 dark:bg-slate-800/60 hover:bg-slate-300/60 text-slate-600 dark:text-slate-300'}`;
-        btn.innerText = lbl;
+        btn.onclick = () => filterByLabel(lbl.name);
+        const isActive = (state.currentTab === 'tag' && state.selectedLabelFilter === lbl.name);
+        const color = lbl.color;
+        
+        btn.className = `px-4 py-1.5 rounded-full text-xs font-semibold shrink-0 transition-all border`;
+        
+        if (isActive) {
+            if (color) {
+                btn.style.backgroundColor = `${color}33`;
+                btn.style.color = color;
+                btn.style.borderColor = color;
+            } else {
+                btn.style.backgroundColor = '';
+                btn.style.color = '';
+                btn.style.borderColor = 'transparent';
+                btn.className += ' bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] shadow-sm';
+            }
+        } else {
+            if (color) {
+                btn.style.backgroundColor = 'transparent';
+                btn.style.color = '';
+                btn.style.borderColor = `${color}33`;
+                btn.className += ' text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800';
+            } else {
+                btn.style.backgroundColor = '';
+                btn.style.color = '';
+                btn.style.borderColor = 'transparent';
+                btn.className += ' bg-slate-200/60 dark:bg-slate-800/60 hover:bg-slate-300/60 text-slate-600 dark:text-slate-300';
+            }
+        }
+        
+        btn.innerText = lbl.name;
         container.appendChild(btn);
     });
 }
@@ -288,7 +417,7 @@ function switchTab(tabId) {
     document.querySelectorAll('.mob-tab').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.mob-drawer-btn').forEach(el => el.classList.remove('active'));
     
-    const activeMobTabs = document.querySelectorAll(`[onclick="switchTab('${tabId}')"]`);
+    const activeMobTabs = document.querySelectorAll(`[onclick*="switchTab('${tabId}')"]`);
     activeMobTabs.forEach(tab => tab.classList.add('active'));
 
     clearSearch();

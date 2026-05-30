@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="es" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <meta name="theme-color" content="#0f172a">
+    <!-- Anti-FOUC: apply theme before paint -->
+    <script>
+        (function() {
+            try {
+                const mode = localStorage.getItem('blog_theme_mode') || 'auto';
+                let isDark = false;
+                if (mode === 'dark') {
+                    isDark = true;
+                } else if (mode === 'auto') {
+                    const configStr = localStorage.getItem('blog_auto_theme_config');
+                    let config = { mode: 'device' };
+                    if (configStr) {
+                        try { config = JSON.parse(configStr); } catch(e) {}
+                    }
+                    if (config.mode === 'device') {
+                        isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    } else if (config.mode === 'schedule') {
+                        const now = new Date();
+                        const currentTime = now.getHours() * 60 + now.getMinutes();
+                        const [fromH, fromM] = (config.schedules?.from || '18:00').split(':').map(Number);
+                        const [toH, toM] = (config.schedules?.to || '06:00').split(':').map(Number);
+                        const fromMinutes = fromH * 60 + fromM;
+                        const toMinutes = toH * 60 + toM;
+                        if (fromMinutes < toMinutes) {
+                            isDark = currentTime >= fromMinutes && currentTime < toMinutes;
+                        } else {
+                            isDark = currentTime >= fromMinutes || currentTime < toMinutes;
+                        }
+                    }
+                }
+                if (isDark) {
+                    document.documentElement.classList.add('dark');
+                    document.documentElement.classList.remove('light');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                    document.documentElement.classList.add('light');
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <title>NTB - Blog</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        google: {
+                            blue: '#1a73e8',
+                            blueDark: '#8ab4f8',
+                            grayBg: '#f0f4f9',
+                            grayBgDark: '#1a1c1e',
+                            surface: '#ffffff',
+                            surfaceDark: '#202124',
+                            sidebarHover: '#e8eaed',
+                            sidebarHoverDark: '#3c4043',
+                            sidebarActive: '#c2e7ff',
+                            sidebarActiveDark: '#004a77',
+                        }
+                    },
+                    borderRadius: {
+                        'md3': '28px'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts & Material Symbols -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="blog/css/estilos.css">
+</head>
+<body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 h-screen max-h-screen transition-colors duration-300 overflow-hidden flex flex-col md:flex-row">
+
+    <!-- ==================== SIDEBAR (Desktop) ==================== -->
+    <aside id="sidebar" class="flex flex-col w-64 xl:w-72 h-screen px-4 py-6 flex-shrink-0 bg-google-grayBg dark:bg-[#111318] justify-between border-r border-slate-200/50 dark:border-slate-800/50 sidebar-expanded">
+        <div id="sidebar-inner" class="flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar">
+            <!-- Brand / Logo -->
+            <div class="flex items-center justify-between px-3">
+                <a href="index.html" class="sidebar-logo-link flex items-center gap-3">
+                    <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-blue-600/20 text-white">
+                        <span class="material-symbols-outlined text-2xl">psychology</span>
+                    </div>
+                    <div>
+                        <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Blog</span>
+                        <span class="text-xs block text-slate-500 dark:text-slate-400">Base de Conocimiento</span>
+                    </div>
+                </a>
+                <!-- Botón para colapsar/expandir sidebar (solo visible en desktop) -->
+                <button id="sidebar-inner-toggle-btn" onclick="toggleSidebarExpanded()" 
+                        class="hidden md:flex p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors shrink-0" 
+                        title="Contraer panel">
+                    <span class="material-symbols-outlined text-lg inner-toggle-icon">left_panel_close</span>
+                </button>
+            </div>
+
+            <!-- New Post Button -->
+            <button onclick="createNewPost()" class="w-full flex items-center gap-3 bg-google-sidebarActive dark:bg-google-sidebarActiveDark text-[#001d35] dark:text-[#c2e7ff] px-4 py-3 rounded-2xl hover:shadow-md transition-shadow font-semibold text-sm">
+                <span class="material-symbols-outlined">add</span>
+                Nueva entrada
+            </button>
+
+            <!-- Search Bar -->
+            <div class="relative">
+                <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 text-lg">search</span>
+                <input id="sidebar-search-input" type="text" placeholder="Buscar entradas..." oninput="handleSearch()" class="w-full bg-slate-200/50 dark:bg-slate-800/50 rounded-full pl-10 pr-8 py-2.5 text-sm outline-none focus:ring-2 focus:ring-google-blue dark:focus:ring-google-blueDark focus:bg-white dark:focus:bg-[#202124] transition-all placeholder-slate-400 dark:placeholder-slate-500 text-slate-800 dark:text-slate-200">
+                <button onclick="clearSearch()" id="sidebar-clear-search" class="hidden absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                    <span class="material-symbols-outlined text-base">close</span>
+                </button>
+            </div>
+
+            <!-- Section Navigation -->
+            <nav class="space-y-1">
+                <button onclick="switchSection('all')" id="section-all-btn" class="section-tab active w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                    <span class="material-symbols-outlined">article</span>
+                    <span>Todas</span>
+                    <span id="section-count-all" class="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50">0</span>
+                </button>
+                <button onclick="switchSection('favorites')" id="section-favorites-btn" class="section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                    <span class="material-symbols-outlined">star</span>
+                    <span>Favoritos</span>
+                    <span id="section-count-favorites" class="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50">0</span>
+                </button>
+                <button onclick="switchSection('archive')" id="section-archive-btn" class="section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                    <span class="material-symbols-outlined">archive</span>
+                    <span>Archivadas</span>
+                    <span id="section-count-archive" class="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50">0</span>
+                </button>
+                <button onclick="switchSection('trash')" id="section-trash-btn" class="section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                    <span class="material-symbols-outlined">delete</span>
+                    <span>Papelera</span>
+                    <span id="section-count-trash" class="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50">0</span>
+                </button>
+            </nav>
+
+            <hr class="border-slate-200/60 dark:border-slate-800/60">
+
+            <!-- Labels Section -->
+            <div>
+                <div class="flex items-center justify-between px-4 mb-1">
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Etiquetas</span>
+                    <button onclick="openLabelDialog()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors" title="Crear etiqueta">
+                        <span class="material-symbols-outlined text-sm">add</span>
+                    </button>
+                </div>
+                <div id="sidebar-labels-container" class="mt-1 space-y-0.5 max-h-48 overflow-y-auto no-scrollbar pr-1">
+                    <!-- Dynamic label buttons -->
+                </div>
+            </div>
+
+            <hr class="border-slate-200/60 dark:border-slate-800/60">
+
+            <!-- File Tree / Post List (sidebar colapsado) -->
+            <div id="collapsed-file-tree-section" class="flex-1 min-h-0 hidden">
+                <div class="flex items-center justify-between px-4 mb-2">
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Entradas</span>
+                </div>
+                <div id="file-tree" class="space-y-0.5 overflow-y-auto max-h-[40vh] no-scrollbar pr-1">
+                    <!-- Dynamic post list items -->
+                </div>
+            </div>
+
+            <!-- Lista expandida (modo pantalla completa) -->
+            <div id="expanded-post-list" class="flex-1 min-h-0 flex flex-col">
+                <div class="flex items-center justify-between px-4 mb-3">
+                    <span id="expanded-section-title" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Todas las entradas</span>
+                    <span id="expanded-section-count" class="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400">0</span>
+                </div>
+                <div id="expanded-file-tree" class="space-y-1 overflow-y-auto flex-1 no-scrollbar pr-1">
+                    <!-- Dynamic expanded post cards -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Actions -->
+        <div class="space-y-2 mt-4 pt-4 border-t border-slate-200/60 dark:border-slate-800/60">
+            <!-- Theme Toggle -->
+            <div class="relative group">
+                <button onclick="toggleTheme()" id="theme-toggle-btn" class="w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm">
+                    <span id="theme-toggle-icon" class="material-symbols-outlined theme-toggle-icon">brightness_auto</span>
+                    <span id="theme-toggle-text" class="theme-toggle-text">Automático</span>
+                </button>
+                <button onclick="openAutoThemeDialog()" id="theme-settings-btn" class="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-full flex items-center justify-center transition-all duration-200 theme-settings-btn" title="Configurar tema automático">
+                    <span class="material-symbols-outlined text-sm">settings</span>
+                </button>
+            </div>
+            <!-- Settings Button -->
+            <button onclick="switchSection('settings')" id="section-settings-btn" class="section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">storage</span>
+                <span>Ajustes de Datos</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- ==================== MOBILE SIDEBAR ==================== -->
+    <div id="mobile-sidebar-backdrop" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden" onclick="toggleMobileSidebar()"></div>
+    <aside id="mobile-sidebar" class="fixed inset-y-0 left-0 w-72 bg-google-grayBg dark:bg-[#111318] z-40 transform -translate-x-full transition-transform duration-300 md:hidden flex flex-col px-4 py-6 overflow-y-auto">
+        <!-- Mobile sidebar content (cloned structure) -->
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white">
+                    <span class="material-symbols-outlined text-xl">psychology</span>
+                </div>
+                <span class="font-bold text-lg tracking-tight text-slate-800 dark:text-slate-200">Blog</span>
+            </div>
+            <button onclick="toggleMobileSidebar()" class="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full">
+                <span class="material-symbols-outlined text-slate-600 dark:text-slate-300">close</span>
+            </button>
+        </div>
+
+        <button onclick="createNewPost()" class="w-full flex items-center gap-3 bg-google-sidebarActive dark:bg-google-sidebarActiveDark text-[#001d35] dark:text-[#c2e7ff] px-4 py-3 rounded-2xl hover:shadow-md transition-shadow font-semibold text-sm mb-4">
+            <span class="material-symbols-outlined">add</span>
+            Nueva entrada
+        </button>
+
+        <nav class="space-y-1 mb-4">
+            <button onclick="switchSection('all')" class="mob-section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm" data-section="all">
+                <span class="material-symbols-outlined">article</span>
+                <span>Todas</span>
+            </button>
+            <button onclick="switchSection('favorites')" class="mob-section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm" data-section="favorites">
+                <span class="material-symbols-outlined">star</span>
+                <span>Favoritos</span>
+            </button>
+            <button onclick="switchSection('archive')" class="mob-section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm" data-section="archive">
+                <span class="material-symbols-outlined">archive</span>
+                <span>Archivadas</span>
+            </button>
+            <button onclick="switchSection('trash')" class="mob-section-tab w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm" data-section="trash">
+                <span class="material-symbols-outlined">delete</span>
+                <span>Papelera</span>
+            </button>
+        </nav>
+
+        <hr class="border-slate-200/60 dark:border-slate-800/60 mb-3">
+        <div class="mb-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 px-4">Etiquetas</span>
+            <div id="mob-labels-container" class="mt-2 space-y-0.5">
+                <!-- Dynamic mobile label buttons -->
+            </div>
+        </div>
+
+        <hr class="border-slate-200/60 dark:border-slate-800/60 mb-3">
+        <div id="mob-file-tree" class="flex-1 space-y-0.5 overflow-y-auto no-scrollbar">
+            <!-- Mobile post list -->
+        </div>
+
+        <div class="mt-auto pt-4 border-t border-slate-200/60 dark:border-slate-800/60">
+            <button onclick="toggleTheme()" class="w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm">
+                <span class="material-symbols-outlined dark:hidden">dark_mode</span>
+                <span class="material-symbols-outlined hidden dark:inline">light_mode</span>
+                <span class="dark:hidden">Modo Oscuro</span>
+                <span class="hidden dark:inline">Modo Claro</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- ==================== MAIN WORKSPACE ==================== -->
+    <main id="main-workspace" class="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-[#1a1c1e] transition-colors duration-300 sidebar-expanded-hide">
+
+        <!-- Top Bar / Header -->
+        <header class="h-14 flex items-center justify-between px-4 sm:px-6 border-b border-slate-200/60 dark:border-slate-800/60 flex-shrink-0 bg-slate-50 dark:bg-[#1a1c1e]">
+            <div class="flex items-center gap-2">
+                <!-- Mobile Menu Button -->
+                <button id="menu-btn" onclick="toggleMobileSidebar()" class="md:hidden p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors">
+                    <span class="material-symbols-outlined">menu</span>
+                </button>
+                <!-- Toggle Sidebar Button -->
+                <button id="sidebar-toggle-btn" onclick="toggleSidebarExpanded()" class="hidden md:flex p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors" title="Expandir panel">
+                    <span class="material-symbols-outlined toggle-icon text-lg">left_panel_open</span>
+                </button>
+                <!-- Breadcrumb -->
+                <div id="editor-breadcrumb" class="hidden sm:flex text-sm text-slate-500 dark:text-slate-400 items-center gap-1.5">
+                    <span class="material-symbols-outlined text-sm">home</span>
+                    <span>/</span>
+                    <span id="breadcrumb-section" class="text-slate-500 dark:text-slate-400">Todas</span>
+                    <span>/</span>
+                    <span id="breadcrumb-title" class="text-slate-800 dark:text-slate-200 font-medium truncate max-w-[250px]">Cargando...</span>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div id="editor-actions" class="flex items-center gap-1">
+                <button onclick="openBackgroundDialog()" id="btn-background" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Fondo personalizado">
+                    <span class="material-symbols-outlined text-lg">palette</span>
+                </button>
+                <button onclick="openHistoryDialog()" id="btn-history" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Historial de versiones">
+                    <span class="material-symbols-outlined text-lg">history</span>
+                </button>
+                <button onclick="toggleCurrentPostPin()" id="btn-pin" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Favorito">
+                    <span class="material-symbols-outlined text-lg" id="pin-icon">star_border</span>
+                </button>
+                <button onclick="archiveCurrentPost()" id="btn-archive" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Archivar">
+                    <span class="material-symbols-outlined text-lg" id="archive-icon">archive</span>
+                </button>
+                <button onclick="trashCurrentPost()" id="btn-trash" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Papelera">
+                    <span class="material-symbols-outlined text-lg">delete</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Content Area -->
+        <div class="flex-1 min-h-0 overflow-y-auto">
+
+            <!-- ===== Editor View ===== -->
+            <div id="editor-view">
+                <!-- Format Toolbar -->
+                <div class="sticky top-0 z-10 bg-slate-50/90 dark:bg-[#1a1c1e]/90 backdrop-blur-md border-b border-slate-200/40 dark:border-slate-800/40 px-4 py-1.5 flex flex-wrap gap-0.5 sm:justify-center items-center">
+                    <!-- Títulos -->
+                    <button onclick="formatDoc('formatBlock', 'H1')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Título 1"><span class="material-symbols-outlined text-lg">format_h1</span></button>
+                    <button onclick="formatDoc('formatBlock', 'H2')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Título 2"><span class="material-symbols-outlined text-lg">format_h2</span></button>
+                    <button onclick="formatDoc('formatBlock', 'H3')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Título 3"><span class="material-symbols-outlined text-lg">format_h3</span></button>
+                    
+                    <div class="w-px h-5 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                    
+                    <!-- Estilos de texto -->
+                    <button onclick="formatDoc('bold')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Negrita"><span class="material-symbols-outlined text-lg">format_bold</span></button>
+                    <button onclick="formatDoc('italic')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Cursiva"><span class="material-symbols-outlined text-lg">format_italic</span></button>
+                    <button onclick="formatDoc('underline')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Subrayado"><span class="material-symbols-outlined text-lg">format_underlined</span></button>
+                    <button onclick="formatDoc('strikethrough')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Tachado"><span class="material-symbols-outlined text-lg">format_strikethrough</span></button>
+                    
+                    <div class="w-px h-5 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                    
+                    <!-- Código -->
+                    <button onclick="formatInlineCode()" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Código en línea"><span class="material-symbols-outlined text-lg">code</span></button>
+                    <button onclick="formatCodeBlock()" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Bloque de código"><span class="material-symbols-outlined text-lg">code_blocks</span></button>
+                    
+                    <div class="w-px h-5 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                    
+                    <!-- Listas y citas -->
+                    <button onclick="formatDoc('insertUnorderedList')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Lista con viñetas"><span class="material-symbols-outlined text-lg">format_list_bulleted</span></button>
+                    <button onclick="formatDoc('insertOrderedList')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Lista numerada"><span class="material-symbols-outlined text-lg">format_list_numbered</span></button>
+                    <button onclick="insertTaskList()" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Lista de tareas"><span class="material-symbols-outlined text-lg">playlist_add_check</span></button>
+                    <button onclick="formatDoc('formatBlock', 'BLOCKQUOTE')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Cita"><span class="material-symbols-outlined text-lg">format_quote</span></button>
+                    
+                    <div class="w-px h-5 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                    
+                    <!-- Enlaces e Insertables -->
+                    <button onclick="formatDoc('createLink', prompt('URL del enlace:'))" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Enlace"><span class="material-symbols-outlined text-lg">link</span></button>
+                    <button onclick="insertImage()" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Imagen"><span class="material-symbols-outlined text-lg">image</span></button>
+                    <button onclick="insertTable()" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Tabla"><span class="material-symbols-outlined text-lg">table_chart</span></button>
+                    <button onclick="formatDoc('insertHorizontalRule')" class="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors" title="Línea Horizontal"><span class="material-symbols-outlined text-lg">horizontal_rule</span></button>
+                </div>
+
+                <!-- Document Container -->
+                <div class="max-w-4xl mx-auto px-6 sm:px-12 py-8 pb-32">
+                    <!-- Icon -->
+                    <div class="text-5xl mb-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 inline-block p-2 rounded-xl transition-colors select-none" id="doc-icon" onclick="changePostIcon()" title="Clic para cambiar icono">
+                        📄
+                    </div>
+
+                    <!-- Title -->
+                    <input type="text" id="doc-title" class="w-full text-3xl sm:text-5xl font-bold bg-transparent border-none outline-none mb-4 text-slate-900 dark:text-white placeholder-slate-300 dark:placeholder-slate-700" placeholder="Título de la entrada" style="font-family: 'Google Sans', sans-serif;">
+
+                    <!-- Content Editable -->
+                    <div id="doc-content" class="editor-content text-lg leading-relaxed text-slate-700 dark:text-slate-300 min-h-[50vh]" contenteditable="true" data-placeholder="Comienza a escribir aquí, usa la barra superior para dar formato...">
+                    </div>
+
+                    <!-- Post Labels (below editor) -->
+                    <div id="post-labels-container" class="mt-6 pt-4 border-t border-slate-200/40 dark:border-slate-800/40 flex flex-wrap gap-2 items-center">
+                        <span class="material-symbols-outlined text-sm text-slate-400">label</span>
+                        <div id="post-labels-chips" class="flex flex-wrap gap-1.5">
+                            <!-- Dynamic label chips -->
+                        </div>
+                        <button onclick="openPostLabelSelector()" class="text-xs font-semibold text-google-blue dark:text-google-blueDark hover:bg-slate-100 dark:hover:bg-slate-800 px-2 py-1 rounded-full transition-colors">+ Etiqueta</button>
+                    </div>
+
+                    <!-- Status Bar -->
+                    <div id="status-bar" class="mt-4 text-xs text-slate-400 dark:text-slate-500 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-sm" id="status-icon">cloud_done</span>
+                        <span id="status-text">Listo</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Empty State ===== -->
+            <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 text-center h-full">
+                <div class="w-24 h-24 rounded-full bg-slate-200/50 dark:bg-slate-800/40 flex items-center justify-center text-slate-400 dark:text-slate-600 mb-4">
+                    <span class="material-symbols-outlined text-5xl">note_alt</span>
+                </div>
+                <h3 class="font-bold text-slate-700 dark:text-slate-300 mb-1">No hay entradas</h3>
+                <p class="text-sm text-slate-400 dark:text-slate-500 max-w-xs">Crea una nueva entrada para empezar a escribir en tu base de conocimiento.</p>
+                <button onclick="createNewPost()" class="mt-6 flex items-center gap-2 bg-google-sidebarActive dark:bg-google-sidebarActiveDark text-[#001d35] dark:text-[#c2e7ff] px-5 py-2.5 rounded-full hover:shadow-md transition-shadow font-semibold text-sm">
+                    <span class="material-symbols-outlined text-lg">add</span>
+                    Nueva entrada
+                </button>
+            </div>
+
+            <!-- ===== Settings View ===== -->
+            <div id="settings-view" class="hidden max-w-2xl mx-auto bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/80 dark:border-slate-800/80 shadow-md p-6 sm:p-8 space-y-8 transition-all duration-300 my-8 mx-4 sm:mx-auto">
+                <div class="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+                    <span class="material-symbols-outlined text-3xl text-google-blue dark:text-google-blueDark">storage</span>
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Gestión de Datos (IndexedDB)</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Controla el almacenamiento de tus entradas y etiquetas de forma local y segura.</p>
+                    </div>
+                </div>
+
+                <!-- Storage Statistics -->
+                <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">analytics</span>Estadísticas</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-white dark:bg-[#202124] p-4 rounded-xl border border-slate-200/40 dark:border-slate-800/30">
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Entradas Guardadas</p>
+                            <p id="stats-posts-count" class="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">0</p>
+                        </div>
+                        <div class="bg-white dark:bg-[#202124] p-4 rounded-xl border border-slate-200/40 dark:border-slate-800/30">
+                            <p class="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase">Etiquetas Creadas</p>
+                            <p id="stats-labels-count" class="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">0</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-center justify-between text-xs px-1">
+                        <span class="text-slate-500 dark:text-slate-400">Tamaño estimado de la base de datos:</span>
+                        <span id="stats-db-size" class="font-bold text-slate-700 dark:text-slate-300 font-mono">Calculando...</span>
+                    </div>
+                    <div id="stats-device-storage"></div>
+                </div>
+
+                <!-- Backup & Restore -->
+                <div class="space-y-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">cloud_download</span>Copias de Seguridad (Archivo Local)</h3>
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button onclick="exportData()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] hover:shadow-md transition-all">
+                            <span class="material-symbols-outlined text-lg">download</span>
+                            Exportar (JSON)
+                        </button>
+                        <div class="flex-1 relative">
+                            <input type="file" id="import-file-input" accept=".json" class="hidden" onchange="importData(event)">
+                            <button onclick="document.getElementById('import-file-input').click()" class="w-full flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl border-2 border-google-blue/30 dark:border-google-blueDark/30 text-google-blue dark:text-google-blueDark hover:bg-google-blue/5 dark:hover:bg-google-blueDark/5 transition-all">
+                                <span class="material-symbols-outlined text-lg">upload</span>
+                                Importar (JSON)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GitHub Sincronización -->
+                <div class="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                        <span class="material-symbols-outlined text-base">sync</span>Sincronización con GitHub (Cifrado Local)
+                    </h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Guarda tus notas de forma segura en un repositorio privado de GitHub. Las credenciales se almacenan cifradas en tu navegador.</p>
+                    
+                    <div class="space-y-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label for="github-repo-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Repositorio (usuario/repo)</label>
+                                <input type="text" id="github-repo-input" placeholder="ej: LuisRZJ/ntb-backups" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-token-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Personal Access Token (PAT)</label>
+                                <input type="password" id="github-token-input" placeholder="ghp_..." class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                                <label for="github-branch-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Rama / Branch</label>
+                                <input type="text" id="github-branch-input" value="main" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-path-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Ruta del archivo</label>
+                                <input type="text" id="github-path-input" value="ntb-backup.json" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                            <div>
+                                <label for="github-pass-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Contraseña Maestra de Cifrado</label>
+                                <input type="password" id="github-pass-input" placeholder="Clave para encriptar local" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center justify-between pt-2">
+                            <div id="github-status-badge" class="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-700"></span> Sin configurar
+                            </div>
+                            <button onclick="saveGithubSettings()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-xl hover:shadow-md transition-all">
+                                Guardar y Conectar
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Botones de Acción GitHub Sincronizar -->
+                    <div id="github-actions-container" class="hidden flex flex-col sm:flex-row gap-3 pt-3">
+                        <button id="btn-github-push" onclick="pushToGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
+                            <span class="material-symbols-outlined text-lg">cloud_upload</span>
+                            Respaldar en GitHub
+                        </button>
+                        <button id="btn-github-pull" onclick="pullFromGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
+                            <span class="material-symbols-outlined text-lg">cloud_download</span>
+                            Restaurar desde GitHub
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div class="pt-6 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-red-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-base">warning</span>Zona de Peligro</h3>
+                    <div class="bg-red-50 dark:bg-red-950/10 rounded-2xl p-5 border border-red-200/50 dark:border-red-900/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div class="space-y-1">
+                            <h4 class="text-sm font-bold text-red-700 dark:text-red-400">Restablecer aplicación</h4>
+                            <p class="text-xs text-red-600/80 dark:text-red-400/60 max-w-md">Eliminará permanentemente todas tus entradas y etiquetas de IndexedDB y restaurará los datos de demostración originales.</p>
+                        </div>
+                        <button onclick="resetApplicationData()" class="w-full sm:w-auto px-5 py-2.5 text-xs font-bold bg-red-600 text-white hover:bg-red-700 rounded-2xl transition-all shadow-sm shrink-0">
+                            Restablecer Datos
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ==================== DIALOGS ==================== -->
+
+    <!-- Label Management Dialog -->
+    <div id="label-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="label-dialog-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col max-h-[80vh]">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
+                <span id="label-dialog-title" class="text-sm font-semibold text-slate-700 dark:text-slate-200">Crear Etiqueta</span>
+                <button onclick="closeLabelDialog()" class="p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full flex">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label for="label-input" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Nombre de la etiqueta</label>
+                    <input id="label-input" type="text" placeholder="Ej: Viajes, Compras, Proyectos..." onkeydown="if(event.key==='Enter') submitLabelDialog()" class="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200 placeholder-slate-400">
+                </div>
+                <div>
+                    <label for="label-parent-select" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Etiqueta Padre (Opcional)</label>
+                    <select id="label-parent-select" class="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                        <option value="">Ninguna (Etiqueta principal)</option>
+                    </select>
+                    <p id="label-parent-help-text" class="text-[10px] text-red-500 dark:text-red-400 mt-1.5 hidden">Esta etiqueta tiene subetiquetas asociadas, por lo que debe ser una etiqueta principal.</p>
+                </div>
+                <div>
+                    <label class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Color de la etiqueta</label>
+                    <div class="flex flex-wrap items-center gap-2" id="label-color-choices">
+                        <button onclick="selectLabelColor(null, this)" class="w-7 h-7 rounded-full border-2 border-slate-300 dark:border-slate-700 bg-transparent flex items-center justify-center transition-transform hover:scale-110 active:scale-95" title="Sin color" data-color="null">
+                            <span class="material-symbols-outlined text-xs text-slate-400">block</span>
+                        </button>
+                        <button onclick="selectLabelColor('#ef4444', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#ef4444] transition-transform hover:scale-110 active:scale-95" title="Rojo" data-color="#ef4444"></button>
+                        <button onclick="selectLabelColor('#f97316', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#f97316] transition-transform hover:scale-110 active:scale-95" title="Naranja" data-color="#f97316"></button>
+                        <button onclick="selectLabelColor('#f59e0b', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#f59e0b] transition-transform hover:scale-110 active:scale-95" title="Amarillo" data-color="#f59e0b"></button>
+                        <button onclick="selectLabelColor('#10b981', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#10b981] transition-transform hover:scale-110 active:scale-95" title="Verde" data-color="#10b981"></button>
+                        <button onclick="selectLabelColor('#14b8a6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#14b8a6] transition-transform hover:scale-110 active:scale-95" title="Menta" data-color="#14b8a6"></button>
+                        <button onclick="selectLabelColor('#3b82f6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#3b82f6] transition-transform hover:scale-110 active:scale-95" title="Azul" data-color="#3b82f6"></button>
+                        <button onclick="selectLabelColor('#6366f1', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#6366f1] transition-transform hover:scale-110 active:scale-95" title="Índigo" data-color="#6366f1"></button>
+                        <button onclick="selectLabelColor('#8b5cf6', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#8b5cf6] transition-transform hover:scale-110 active:scale-95" title="Púrpura" data-color="#8b5cf6"></button>
+                        <button onclick="selectLabelColor('#ec4899', this)" class="w-7 h-7 rounded-full border border-transparent bg-[#ec4899] transition-transform hover:scale-110 active:scale-95" title="Rosa" data-color="#ec4899"></button>
+                        
+                        <div class="relative w-7 h-7 rounded-full border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex items-center justify-center hover:scale-110 active:scale-95 cursor-pointer overflow-hidden" title="Color personalizado">
+                            <span class="material-symbols-outlined text-sm text-slate-500">palette</span>
+                            <input type="color" id="custom-label-color-input" onchange="selectCustomLabelColor(this.value)" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                        </div>
+                    </div>
+                </div>
+                <div id="label-error" class="hidden text-xs text-red-500 dark:text-red-400"></div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <button onclick="closeLabelDialog()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button onclick="submitLabelDialog()" id="label-dialog-submit-btn" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Label Confirmation Dialog -->
+    <div id="delete-label-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[70] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="delete-label-dialog-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4">
+                <div class="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-red-500">delete</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Eliminar etiqueta</h3>
+                    <p id="delete-label-message" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5"></p>
+                </div>
+            </div>
+            <!-- Opciones de protección para entradas vinculadas -->
+            <div id="delete-label-protection-options" class="px-5 pb-4 space-y-2.5 hidden border-t border-slate-100 dark:border-slate-800 pt-4">
+                <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">Selecciona una opción para las entradas vinculadas:</p>
+                <label class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 cursor-pointer select-none text-xs text-slate-700 dark:text-slate-300 transition-colors">
+                    <input type="radio" name="delete-post-option" value="keep" checked class="mt-0.5 text-google-blue border-slate-300 focus:ring-google-blue">
+                    <div>
+                        <span class="font-semibold block">Solo quitar la etiqueta</span>
+                        <p class="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">Las entradas se conservarán intactas pero ya no tendrán esta etiqueta.</p>
+                    </div>
+                </label>
+                <label class="flex items-start gap-3 p-3 rounded-xl border border-red-200 dark:border-red-900/30 bg-red-50/20 dark:bg-red-950/10 hover:bg-red-50/50 dark:hover:bg-red-950/20 cursor-pointer select-none text-xs text-red-600 dark:text-red-400 transition-colors">
+                    <input type="radio" name="delete-post-option" value="delete" class="mt-0.5 text-red-500 border-slate-300 focus:ring-red-500">
+                    <div>
+                        <span class="font-semibold block">Eliminar también las entradas vinculadas</span>
+                        <p class="text-[10px] text-red-400 dark:text-red-500 mt-0.5">ATENCIÓN: Se moverán a la papelera todas las entradas asociadas a esta etiqueta o a sus subetiquetas.</p>
+                    </div>
+                </label>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800">
+                <button onclick="closeDeleteLabelDialog()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button onclick="confirmDeleteLabel()" class="px-5 py-2 text-xs font-bold bg-red-500 hover:bg-red-600 text-white rounded-full transition-all">Eliminar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Post Label Selector Popover -->
+    <div id="post-label-selector-backdrop" class="hidden fixed inset-0 z-[55]" onclick="closePostLabelSelector()"></div>
+    <div id="post-label-selector" class="hidden fixed z-[56] bg-white dark:bg-[#202124] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 w-64 max-h-60 overflow-y-auto p-3 space-y-1 transition-all duration-200">
+        <!-- Dynamic label checkboxes -->
+    </div>
+
+    <!-- Note History Dialog -->
+    <div id="history-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="history-dialog-container" class="w-full max-w-lg max-h-[80vh] bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined text-slate-600 dark:text-slate-400">history</span>
+                    <div>
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Historial</span>
+                        <p id="history-post-title" class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px]"></p>
+                    </div>
+                </div>
+                <button onclick="closeHistoryDialog()" class="p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full flex">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+            <div id="history-list" class="flex-1 overflow-y-auto p-4 space-y-3">
+            </div>
+            <div class="px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <p class="text-xs text-slate-400 dark:text-slate-500 text-center">Restaura una versión anterior para recuperar su contenido</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto Theme Configuration Dialog -->
+    <div id="auto-theme-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="auto-theme-dialog-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Configurar Tema Automático</span>
+                <button onclick="closeAutoThemeDialog()" class="p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full flex">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+            <div class="p-5 space-y-5">
+                <div class="space-y-3">
+                    <label class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">Método de cambio</label>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 auto-theme-option" data-mode="device">
+                            <input type="radio" name="auto-theme-mode" value="device" class="w-4 h-4 accent-google-blue">
+                            <span class="material-symbols-outlined text-slate-600 dark:text-slate-400">smartphone</span>
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Preferencia del dispositivo</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Sigue la configuración del sistema</p>
+                            </div>
+                            <span class="auto-theme-check material-symbols-outlined text-google-blue hidden">check_circle</span>
+                        </label>
+                        <label class="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 auto-theme-option" data-mode="battery">
+                            <input type="radio" name="auto-theme-mode" value="battery" class="w-4 h-4 accent-google-blue">
+                            <span class="material-symbols-outlined text-slate-600 dark:text-slate-400">battery_saver</span>
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Ahorro de batería</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Activa modo oscuro con batería baja</p>
+                            </div>
+                            <span class="auto-theme-check material-symbols-outlined text-google-blue hidden">check_circle</span>
+                        </label>
+                        <label class="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 auto-theme-option" data-mode="schedule">
+                            <input type="radio" name="auto-theme-mode" value="schedule" class="w-4 h-4 accent-google-blue">
+                            <span class="material-symbols-outlined text-slate-600 dark:text-slate-400">schedule</span>
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Horarios</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Activa modo oscuro en horario específico</p>
+                            </div>
+                            <span class="auto-theme-check material-symbols-outlined text-google-blue hidden">check_circle</span>
+                        </label>
+                    </div>
+                </div>
+                <div id="battery-config" class="hidden space-y-3">
+                    <label class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">Nivel de batería para activar modo oscuro</label>
+                    <div class="flex items-center gap-3">
+                        <input type="range" id="battery-threshold" min="5" max="50" value="20" class="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-google-blue">
+                        <span id="battery-threshold-value" class="text-sm font-semibold text-slate-600 dark:text-slate-300 w-12 text-right">20%</span>
+                    </div>
+                </div>
+                <div id="schedule-config" class="hidden space-y-3">
+                    <label class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">Horario para modo oscuro</label>
+                    <div class="flex items-center gap-3">
+                        <div class="flex-1">
+                            <label class="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Desde</label>
+                            <input type="time" id="schedule-from" value="18:00" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                        </div>
+                        <div class="flex-1">
+                            <label class="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Hasta</label>
+                            <input type="time" id="schedule-to" value="06:00" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800">
+                <button onclick="closeAutoThemeDialog()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button onclick="saveAutoThemeConfig()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset DB Confirmation Dialog -->
+    <div id="reset-db-dialog-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="reset-db-dialog-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4">
+                <div class="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-red-500">warning</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Restablecer aplicación</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">¿Estás seguro? Esto eliminará permanentemente todas tus entradas y etiquetas.</p>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800">
+                <button onclick="closeResetDbDialog()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button onclick="confirmResetApplicationData()" class="px-5 py-2 text-xs font-bold bg-red-500 hover:bg-red-600 text-white rounded-full transition-all">Restablecer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Emoji Picker Dialog -->
+    <div id="icon-picker-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300" onclick="if(event.target === this) closeIconPicker()">
+        <div id="icon-picker-container" class="w-full max-w-md bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col max-h-[85vh]">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Seleccionar Icono</h3>
+                <button onclick="closeIconPicker()" class="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 transition-colors">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+            
+            <!-- Búsqueda y Selección Manual -->
+            <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-800 space-y-3">
+                <input type="text" id="emoji-search-input" oninput="searchEmojis(this.value)" placeholder="Buscar emoji..." class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                <div class="flex gap-2">
+                    <input type="text" id="manual-emoji-input" maxlength="2" placeholder="Pegar emoji (ej. 🚀)" class="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200 text-center">
+                    <button onclick="saveManualEmoji()" class="px-4 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-lg hover:shadow-md transition-all">Guardar</button>
+                </div>
+            </div>
+
+            <!-- Emojis por Categorías (Scrolleable) -->
+            <div id="emoji-categories-container" class="flex-1 overflow-y-auto p-5 space-y-4 max-h-[50vh]">
+                <!-- Cargado dinámicamente desde javascript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Background Picker Dialog -->
+    <div id="background-picker-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300" onclick="if(event.target === this) closeBackgroundDialog()">
+        <div id="background-picker-container" class="w-full max-w-md bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col max-h-[85vh]">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Fondo de la Entrada</h3>
+                <button onclick="closeBackgroundDialog()" class="p-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 transition-colors">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-5 space-y-5">
+                <!-- Colores Sólidos -->
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">Colores Sólidos</h4>
+                    <div class="grid grid-cols-5 gap-2" id="solid-colors-grid">
+                        <!-- Cargado dinámicamente desde javascript -->
+                    </div>
+                    <!-- Selector de Color Libre -->
+                    <div class="mt-4 flex items-center gap-3">
+                        <label for="custom-solid-color" class="text-xs text-slate-500 dark:text-slate-400 font-semibold">Color personalizado:</label>
+                        <input type="color" id="custom-solid-color" onchange="applyCustomSolidColor(this.value)" class="w-10 h-8 rounded cursor-pointer border border-slate-200 dark:border-slate-700 bg-transparent">
+                    </div>
+                </div>
+                
+                <!-- Gradientes -->
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">Gradientes Elegantes</h4>
+                    <div class="grid grid-cols-2 gap-3" id="gradients-grid">
+                        <!-- Cargado dinámicamente desde javascript -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex items-center justify-between px-5 py-4 border-t border-slate-100 dark:border-slate-800">
+                <button onclick="removePostBackground()" class="px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-full transition-colors flex items-center gap-1">
+                    <span class="material-symbols-outlined text-sm">format_color_reset</span> Restablecer
+                </button>
+                <button onclick="closeBackgroundDialog()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Listo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub Decrypt Configuration Dialog -->
+    <div id="github-decrypt-backdrop" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="github-decrypt-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <div class="w-10 h-10 rounded-full bg-google-blue/10 dark:bg-google-blueDark/10 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-google-blue dark:text-google-blueDark">lock_open</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Sincronización con GitHub</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.</p>
+                </div>
+            </div>
+            <div class="p-5">
+                <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña maestra de cifrado" onkeydown="if(event.key==='Enter') submitGithubDecrypt()" class="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                <div id="github-decrypt-error" class="text-xs text-red-500 mt-2 hidden">Contraseña incorrecta</div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <button onclick="skipGithubDecrypt()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Trabajar en Local</button>
+                <button onclick="submitGithubDecrypt()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Iniciar Sincronización</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub Update Cloud Backup Dialog -->
+    <div id="github-update-backdrop" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[70] flex items-center justify-center p-4 transition-all duration-300">
+        <div id="github-update-container" class="w-full max-w-sm bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform scale-95 transition-all duration-300 flex flex-col">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+                <div class="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-amber-500">update</span>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Actualización en la Nube</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Se detectaron datos más recientes en tu repositorio de GitHub.</p>
+                </div>
+            </div>
+            <div class="p-5 space-y-3">
+                <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Tus notas locales están desactualizadas respecto a la última versión respaldada. Para evitar conflictos, debes decidir si importar los cambios remotos o mantener tus notas locales (los datos locales pisarán el servidor en tu siguiente respaldo).
+                </p>
+                <div class="bg-amber-50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-900/30 rounded-xl p-3 text-[10px] text-amber-700 dark:text-amber-400 leading-snug">
+                    <strong>¡Atención!</strong> La opción "Restaurar" reemplazará por completo tu base de datos IndexedDB local por los datos del repositorio de GitHub.
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <button onclick="skipGithubUpdate()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Conservar locales</button>
+                <button onclick="confirmGithubPull()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Restaurar de la Nube</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TOAST / SNACKBAR ==================== -->
+    <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 transform translate-y-20 opacity-0 transition-all duration-300 ease-out flex items-center justify-between gap-4 px-5 py-3 rounded-2xl bg-slate-900 dark:bg-slate-200 text-slate-100 dark:text-slate-900 shadow-xl max-w-sm w-[calc(100%-2rem)] pointer-events-none">
+        <span id="toast-message" class="text-xs font-medium">Mensaje</span>
+        <button id="toast-action" class="text-xs font-extrabold uppercase text-[#c2e7ff] dark:text-google-blue tracking-wider shrink-0 hover:brightness-110 active:opacity-70 transition-all">Deshacer</button>
+    </div>
+
+    <!-- ==================== MAIN SCRIPT ==================== -->
+    <script type="module" src="blog/js/app.js"></script>
+    <script src="sw-register.js"></script>
+</body>
+</html>

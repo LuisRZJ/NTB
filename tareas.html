@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Tareas — Daily Planner</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="#0f172a">
+<meta name="application-name" content="Daily Planner">
+
+<!-- iOS / Safari -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Daily Planner">
+
+<!-- Android fallback -->
+<meta name="mobile-web-app-capable" content="yes">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tareas/css/estilos.css">
+<script>
+  try {
+    const resolved = localStorage.getItem('app-theme-resolved') || localStorage.getItem('app-theme') || 'light';
+    let themeToApply = resolved;
+    if (themeToApply === 'auto') {
+      themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', themeToApply);
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<!-- Pantalla de carga -->
+<div id="loader">
+  <div class="loader-inner">
+    <div class="loader-icon">✦</div>
+    <div class="loader-text">Daily Planner</div>
+    <div class="loader-bar"><div class="loader-bar-fill"></div></div>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- Header -->
+  <div id="header-mount"></div>
+
+  <!-- Add task form -->
+  <div id="form-mount"></div>
+
+  <!-- Filters -->
+  <div id="filters-mount"></div>
+
+  <!-- Task list -->
+  <div id="task-mount"></div>
+
+</div>
+
+<!-- Settings overlay (fuera del .app para z-index correcto) -->
+<div id="settings-mount"></div>
+
+<!-- Projects overlay -->
+<div id="projects-mount"></div>
+
+<!-- Stats overlay -->
+<div id="stats-mount"></div>
+
+<!-- History overlay -->
+<div id="history-mount"></div>
+
+<!-- Task detail modal -->
+<div class="detail-overlay" id="detail-overlay" aria-hidden="true">
+  <div class="detail-panel" id="detail-panel">
+    <div class="detail-handle" id="detail-handle" aria-hidden="true"></div>
+    <div class="detail-header">
+      <button class="detail-back" id="detail-back" title="Volver">←</button>
+      <span class="detail-header-title">Detalle de tarea</span>
+      <button class="detail-close" id="detail-close" title="Cerrar">✕</button>
+    </div>
+    <div class="detail-body" id="detail-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Modal de sincronización con la nube (no se puede cerrar sin elegir una opción) -->
+<div class="sync-modal-overlay" id="sync-modal" style="display:none" aria-modal="true" role="dialog">
+  <div class="sync-modal">
+    <div class="sync-modal-icon">☁</div>
+    <h2 class="sync-modal-title">Backup encontrado en la nube</h2>
+    <p class="sync-modal-msg" id="sync-modal-msg"></p>
+    <div class="sync-modal-actions">
+      <button class="sync-modal-btn sync-modal-btn-secondary" id="sync-keep-local">Continuar con datos locales</button>
+      <button class="sync-modal-btn sync-modal-btn-primary" id="sync-restore">↓ Restaurar backup</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de descifrado de configuración de GitHub -->
+<div class="sync-modal-overlay" id="github-decrypt-backdrop" style="display:none" aria-modal="true" role="dialog">
+  <div class="sync-modal">
+    <div class="sync-modal-icon">🔑</div>
+    <h2 class="sync-modal-title">Sincronización con GitHub</h2>
+    <p class="sync-modal-msg">Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.</p>
+    <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña maestra de cifrado" class="settings-input" style="width:100%; text-align:center; box-sizing: border-box; margin-bottom: 8px;"/>
+    <div id="github-decrypt-error" class="settings-data-status err" style="display:none; margin-bottom: 8px;">Contraseña incorrecta</div>
+    <div class="sync-modal-actions">
+      <button class="sync-modal-btn sync-modal-btn-secondary" id="github-decrypt-skip">Trabajar en Local</button>
+      <button class="sync-modal-btn sync-modal-btn-primary" id="github-decrypt-submit">Iniciar Sincronización</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de progreso del día -->
+<div class="day-progress-overlay" id="day-progress-overlay" aria-hidden="true">
+  <div class="day-progress-modal">
+    <div class="day-progress-header">
+      <h2>Progreso del día</h2>
+      <button class="day-progress-close" id="day-progress-close">✕</button>
+    </div>
+    <div class="day-progress-body" id="day-progress-body">
+      <!-- Contenido dinámico -->
+    </div>
+  </div>
+</div>
+
+<!-- Modal de detalle de tareas pospuestas -->
+<div class="snooze-detail-overlay" id="snooze-detail-overlay" aria-hidden="true">
+  <div class="snooze-detail-modal">
+    <div class="snooze-detail-header">
+      <h2>Historial de Pospuestas</h2>
+      <button class="snooze-detail-close" id="snooze-detail-close">✕</button>
+    </div>
+    <div class="snooze-detail-body" id="snooze-detail-body">
+      <!-- Contenido dinámico -->
+    </div>
+  </div>
+</div>
+
+<script src="tareas/js/componentes/db.js"></script>
+<script src="tareas/js/componentes/crypto.js"></script>
+<script src="tareas/js/componentes/github.js"></script>
+<script src="tareas/js/componentes/categorias.js"></script>
+<script src="tareas/js/componentes/proyectos.js"></script>
+<script src="tareas/js/componentes/helpers.js"></script>
+<script src="tareas/js/componentes/markdown.js"></script>
+<script src="tareas/components/header.js"></script>
+<script src="tareas/components/form.js"></script>
+<script src="tareas/components/filters.js"></script>
+<script src="tareas/components/taskSection.js"></script>
+<script src="tareas/components/settings.js"></script>
+<script src="tareas/components/projects.js"></script>
+<script src="tareas/components/stats.js"></script>
+<script src="tareas/components/history.js"></script>
+<script src="tareas/js/app.js"></script>
+
+<!-- Registro del Service Worker -->
+<script src="sw-register.js"></script>
+</body>
+</html>

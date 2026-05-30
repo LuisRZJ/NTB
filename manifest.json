@@ -1,0 +1,28 @@
+{
+  "short_name": "NTB",
+  "name": "NTB Personal Workspace",
+  "description": "Espacio de trabajo personal premium para notas, tareas y blog.",
+  "start_url": "/index.html",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "any",
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "maskable"
+    }
+  ]
+}

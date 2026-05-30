@@ -1,4 +1,9 @@
-let labelsList = ["Personal", "Trabajo", "Ideas", "Tareas"];
+let labelsList = [
+    { name: "Personal", color: "#6366f1" },
+    { name: "Trabajo", color: "#3b82f6" },
+    { name: "Ideas", color: "#ec4899" },
+    { name: "Tareas", color: "#10b981" }
+];
 
 export function getLabelsList() {
     return [...labelsList];
@@ -8,14 +13,19 @@ export function setLabelsList(newLabels) {
     labelsList = newLabels;
 }
 
-export function addLabel(label) {
-    if (!labelsList.includes(label)) {
-        labelsList.push(label);
+export function addLabel(labelName, color = null) {
+    if (!labelsList.some(l => l.name === labelName)) {
+        labelsList.push({ name: labelName, color });
     }
 }
 
-export function removeLabel(label) {
-    labelsList = labelsList.filter(l => l !== label);
+export function removeLabel(labelName) {
+    labelsList = labelsList.filter(l => l.name !== labelName);
+}
+
+export function getLabelColor(labelName) {
+    const label = labelsList.find(l => l.name === labelName);
+    return label ? label.color : null;
 }
 
 export { labelsList };
@@ -101,7 +111,7 @@ export function createNoteSnapshot(note, action = 'create') {
         title: note.title,
         content: note.content,
         color: note.color,
-        label: note.label,
+        tags: Array.isArray(note.tags) ? [...note.tags] : [],
         isPinned: note.isPinned,
         timestamp: Date.now(),
         action: action
@@ -135,7 +145,7 @@ export function restoreNoteFromSnapshot(noteId, snapshotId) {
     note.title = snapshot.title;
     note.content = snapshot.content;
     note.color = snapshot.color;
-    note.label = snapshot.label;
+    note.tags = Array.isArray(snapshot.tags) ? [...snapshot.tags] : [];
     note.isPinned = snapshot.isPinned;
     note.updatedAt = Date.now();
 

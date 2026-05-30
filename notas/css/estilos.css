@@ -78,3 +78,21 @@ body {
 .touch-device .label-marquee-container::after {
     opacity: 0;
 }
+
+@media (hover: none) {
+    .theme-settings-btn,
+    .label-actions-div {
+        opacity: 1 !important;
+    }
+}
+
+.sidebar-logo-link {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.sidebar-logo-link:hover {
+    opacity: 0.8;
+}
+

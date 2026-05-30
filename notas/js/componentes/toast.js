@@ -20,8 +20,8 @@ export function showToast(message, actionText = null, actionCallback = null) {
         actBtn.classList.add('hidden');
     }
 
-    toast.classList.remove('translate-y-20', 'opacity-0');
-    toast.classList.add('translate-y-0', 'opacity-100');
+    toast.classList.remove('translate-y-20', 'opacity-0', 'pointer-events-none');
+    toast.classList.add('translate-y-0', 'opacity-100', 'pointer-events-auto');
 
     if (toastTimeout) clearTimeout(toastTimeout);
 
@@ -34,6 +34,6 @@ export function hideToast() {
     const toast = document.getElementById('toast-container');
     if (!toast) return;
 
-    toast.classList.remove('translate-y-0', 'opacity-100');
-    toast.classList.add('translate-y-20', 'opacity-0');
+    toast.classList.remove('translate-y-0', 'opacity-100', 'pointer-events-auto');
+    toast.classList.add('translate-y-20', 'opacity-0', 'pointer-events-none');
 }

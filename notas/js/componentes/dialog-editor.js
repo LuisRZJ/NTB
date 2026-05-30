@@ -3,7 +3,7 @@ import { saveNotesToStorage } from './storage.js';
 import { refreshNotesView, formatFullDate, formatDate } from './renderer.js';
 import { showToast } from './toast.js';
 import { moveNoteToTrash } from './note-mutations.js';
-import { populateLabelSelectors } from './labels.js';
+import { getLabelsList } from './state.js';
 import { openNoteHistory } from './history.js';
 
 export function openFullEditor() {
@@ -12,21 +12,108 @@ export function openFullEditor() {
     const headerText = document.getElementById('dialog-header-text');
     const titleInput = document.getElementById('dialog-note-title');
     const contentInput = document.getElementById('dialog-note-content');
-    const labelSelector = document.getElementById('dialog-note-label');
     const deleteBtn = document.getElementById('dialog-delete-btn');
 
     if (headerText) headerText.innerText = "Crear Nota";
     if (titleInput) titleInput.value = '';
     if (contentInput) contentInput.value = '';
-    if (labelSelector) labelSelector.value = '';
     if (deleteBtn) deleteBtn.classList.add('hidden');
 
-    populateLabelSelectors();
+    renderDialogTagChips([]);
     setDialogColor('default');
     updateDialogPinButton();
     updateDialogArchiveButton();
 
     toggleDialogUI(true);
+}
+
+/**
+ * Renderiza los chips de etiquetas en el dialog.
+ * @param {string[]} selectedTags - etiquetas ya seleccionadas para la nota
+ */
+export function renderDialogTagChips(selectedTags = []) {
+    const container = document.getElementById('dialog-tags-chips');
+    if (!container) return;
+
+    const labels = getLabelsList();
+    container.innerHTML = '';
+
+    if (labels.length === 0) {
+        container.innerHTML = '<span class="text-[10px] text-slate-400 dark:text-slate-500 italic">Sin etiquetas creadas</span>';
+        return;
+    }
+
+    labels.forEach(label => {
+        const isActive = selectedTags.includes(label.name);
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.dataset.tag = label.name;
+        chip.dataset.active = isActive ? 'true' : 'false';
+        
+        chip.className = 'dialog-tag-chip text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-all duration-150';
+        
+        const color = label.color;
+        if (isActive) {
+            if (color) {
+                chip.style.backgroundColor = `${color}33`;
+                chip.style.color = color;
+                chip.style.borderColor = color;
+            } else {
+                chip.className += ' bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] border-transparent';
+            }
+        } else {
+            if (color) {
+                chip.style.backgroundColor = 'transparent';
+                chip.style.borderColor = `${color}33`;
+                chip.className += ' text-slate-500 dark:text-slate-400';
+            } else {
+                chip.className += ' bg-transparent text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-600 hover:border-google-blue dark:hover:border-google-blueDark';
+            }
+        }
+        
+        chip.textContent = label.name;
+        chip.onclick = () => {
+            const active = chip.dataset.active === 'true';
+            const nextActive = !active;
+            chip.dataset.active = nextActive ? 'true' : 'false';
+            
+            chip.className = 'dialog-tag-chip text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-all duration-150';
+            
+            if (nextActive) {
+                if (color) {
+                    chip.style.backgroundColor = `${color}33`;
+                    chip.style.color = color;
+                    chip.style.borderColor = color;
+                } else {
+                    chip.style.backgroundColor = '';
+                    chip.style.color = '';
+                    chip.style.borderColor = '';
+                    chip.className += ' bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] border-transparent';
+                }
+            } else {
+                if (color) {
+                    chip.style.backgroundColor = 'transparent';
+                    chip.style.color = '';
+                    chip.style.borderColor = `${color}33`;
+                    chip.className += ' text-slate-500 dark:text-slate-400';
+                } else {
+                    chip.style.backgroundColor = '';
+                    chip.style.color = '';
+                    chip.style.borderColor = '';
+                    chip.className += ' bg-transparent text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-600 hover:border-google-blue dark:hover:border-google-blueDark';
+                }
+            }
+        };
+        container.appendChild(chip);
+    });
+}
+
+/**
+ * Devuelve los tags actualmente seleccionados en el dialog.
+ */
+function getSelectedDialogTags() {
+    const chips = document.querySelectorAll('.dialog-tag-chip[data-active="true"]');
+    return Array.from(chips).map(c => c.dataset.tag);
 }
 
 export function openFullEditorForEdit(noteId, event) {
@@ -47,7 +134,6 @@ export function openFullEditorForEdit(noteId, event) {
     const headerText = document.getElementById('dialog-header-text');
     const titleInput = document.getElementById('dialog-note-title');
     const contentInput = document.getElementById('dialog-note-content');
-    const labelSelector = document.getElementById('dialog-note-label');
     const deleteBtn = document.getElementById('dialog-delete-btn');
     const datesDiv = document.getElementById('dialog-note-dates');
     const createdDateSpan = document.getElementById('dialog-created-date');
@@ -58,7 +144,6 @@ export function openFullEditorForEdit(noteId, event) {
     if (headerText) headerText.innerText = "Editar Nota";
     if (titleInput) titleInput.value = note.title || '';
     if (contentInput) contentInput.value = note.content || '';
-    if (labelSelector) labelSelector.value = note.label || '';
     if (deleteBtn) deleteBtn.classList.remove('hidden');
 
     if (datesDiv) {
@@ -84,7 +169,7 @@ export function openFullEditorForEdit(noteId, event) {
         }
     }
 
-    populateLabelSelectors();
+    renderDialogTagChips(Array.isArray(note.tags) ? note.tags : []);
     setDialogColor(state.dialogColor);
     updateDialogPinButton();
     updateDialogArchiveButton();
@@ -220,11 +305,10 @@ export function updateDialogArchiveButton() {
 export function saveDialogNote() {
     const titleInput = document.getElementById('dialog-note-title');
     const contentInput = document.getElementById('dialog-note-content');
-    const labelSelector = document.getElementById('dialog-note-label');
 
     const title = titleInput ? titleInput.value.trim() : '';
     const content = contentInput ? contentInput.value.trim() : '';
-    const label = labelSelector ? labelSelector.value : '';
+    const tags = getSelectedDialogTags();
 
     if (!title && !content) {
         showToast("No se puede guardar una nota vacía");
@@ -237,15 +321,17 @@ export function saveDialogNote() {
         if (note) {
             const titleChanged = note.title !== title;
             const contentChanged = note.content !== content;
+            const prevTags = Array.isArray(note.tags) ? note.tags : [];
+            const tagsChanged = JSON.stringify(prevTags.slice().sort()) !== JSON.stringify(tags.slice().sort());
 
-            if (titleChanged || contentChanged || note.color !== state.dialogColor || note.label !== (label || null)) {
+            if (titleChanged || contentChanged || note.color !== state.dialogColor || tagsChanged) {
                 addNoteToHistory(note, 'edit');
             }
 
             note.title = title;
             note.content = content;
             note.color = state.dialogColor;
-            note.label = label || null;
+            note.tags = tags;
             note.isPinned = state.dialogIsPinned;
             note.isArchived = state.dialogIsArchived;
             note.updatedAt = Date.now();
@@ -256,7 +342,7 @@ export function saveDialogNote() {
             title: title,
             content: content,
             color: state.dialogColor,
-            label: label || null,
+            tags: tags,
             isPinned: state.dialogIsPinned,
             isArchived: state.dialogIsArchived,
             isTrash: false,
@@ -290,3 +376,4 @@ window.setDialogColor = setDialogColor;
 window.saveDialogNote = saveDialogNote;
 window.dialogDeleteNote = dialogDeleteNote;
 window.openHistoryFromDialog = openHistoryFromDialog;
+window.renderDialogTagChips = renderDialogTagChips;

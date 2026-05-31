@@ -12,15 +12,14 @@
      * @returns {Promise<{sha: string|null, content: string|null, updatedAt: string|null}>}
      */
     async function getBackupMetadata(token, repo, filepath, branch = 'main') {
-        const url = `https://api.github.com/repos/${repo}/contents/${filepath}?ref=${branch}`;
+        const url = `https://api.github.com/repos/${repo}/contents/${filepath}?ref=${branch}&_t=${Date.now()}`;
         
         try {
             const response = await fetch(url, {
                 method: 'GET',
                 headers: {
                     'Authorization': `token ${token}`,
-                    'Accept': 'application/vnd.github.v3+json',
-                    'Cache-Control': 'no-cache'
+                    'Accept': 'application/vnd.github.v3+json'
                 }
             });
             

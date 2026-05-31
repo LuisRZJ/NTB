@@ -212,8 +212,13 @@ body {
 
 /* ── Sidebar modes ─────────────────────────────────────────── */
 #sidebar {
+    position: relative;
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
                 flex-shrink 0.3s ease;
+}
+
+#sidebar.no-transition {
+    transition: none !important;
 }
 
 /* Ocultar sidebar en móviles si no está expandido en pantalla completa */
@@ -233,6 +238,12 @@ body {
     overflow-y: auto;
     height: auto !important;
     min-height: 100vh;
+}
+
+/* En modo expandido (pantalla completa), el contenedor de etiquetas no debe tener scroll ni límite de altura */
+#sidebar.sidebar-expanded #sidebar-labels-container {
+    max-height: none !important;
+    overflow: visible !important;
 }
 
 /* En modo expandido, el div interno no restringe la altura ni hace scroll propio */
@@ -647,4 +658,44 @@ body {
 }
 #editor-view.text-dark-contrast #post-labels-container button:hover {
     background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+/* ── Mejoras de Etiquetas y Redimensionador del Sidebar ── */
+
+/* Rotación y transición para chevrons de etiquetas */
+.rotate-90 {
+    transform: rotate(90deg);
+}
+
+button[onclick*="toggleLabelCollapse"] {
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Controlador vertical de redimensionamiento */
+#sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 50;
+    background-color: transparent;
+    transition: background-color 0.2s ease;
+}
+
+#sidebar-resize-handle:hover,
+#sidebar-resize-handle.resizing {
+    background-color: rgba(26, 115, 232, 0.35); /* Google Blue con transparencia */
+}
+
+/* Ocultar el redimensionador en pantalla completa y en móvil */
+#sidebar.sidebar-expanded #sidebar-resize-handle {
+    display: none !important;
+}
+
+@media (max-width: 767px) {
+    #sidebar-resize-handle {
+        display: none !important;
+    }
 }

@@ -17,6 +17,9 @@ import {
 } from './state.js';
 import { savePostsToStorage } from './storage.js';
 
+// Conjunto de IDs de etiquetas que están expandidas
+const expandedLabels = new Set();
+
 // ── Utilidades de filtro ─────────────────────────────────────
 
 /**
@@ -350,11 +353,94 @@ export function updateSectionCounts() {
 /**
  * Renderiza los botones de etiquetas en el sidebar.
  */
+/**
+ * Conmuta el estado expandido/colapsado de una etiqueta.
+ * @param {string} labelId 
+ */
+export function toggleLabelCollapse(labelId) {
+    if (expandedLabels.has(labelId)) {
+        expandedLabels.delete(labelId);
+    } else {
+        expandedLabels.add(labelId);
+    }
+    renderSidebarLabels();
+}
+window.toggleLabelCollapse = toggleLabelCollapse;
+
+/**
+ * Renderiza los botones de etiquetas en el sidebar.
+ */
 export function renderSidebarLabels() {
     const container = document.getElementById('sidebar-labels-container');
     const mobContainer = document.getElementById('mob-labels-container');
 
     if (!container) return;
+
+    const renderLabelTree = (parentId = null, depth = 0) => {
+        let levelLabels;
+        if (parentId === null) {
+            levelLabels = labels.filter(l => !l.parentId || !labels.some(p => p.id === l.parentId));
+        } else {
+            levelLabels = labels.filter(l => l.parentId === parentId);
+        }
+
+        if (levelLabels.length === 0) return '';
+
+        return levelLabels.map(label => {
+            const children = labels.filter(l => l.parentId === label.id);
+            const hasChildren = children.length > 0;
+            const isExpanded = expandedLabels.has(label.id);
+            
+            const isActive = currentSection === 'label' && currentLabelFilter === label.id;
+            const activeClass = isActive 
+                ? 'bg-google-sidebarActive dark:bg-google-sidebarActiveDark text-[#001d35] dark:text-[#c2e7ff] font-semibold' 
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60';
+            const iconStyle = label.color ? `style="color: ${label.color}"` : '';
+
+            // Botón chevron para colapsar/expandir o espaciador
+            let toggleBtn = '';
+            if (hasChildren) {
+                const rotationClass = isExpanded ? 'rotate-90' : '';
+                toggleBtn = `
+                    <button onclick="event.stopPropagation(); toggleLabelCollapse('${label.id}')" 
+                            class="p-0.5 hover:bg-slate-300 dark:hover:bg-slate-700 rounded-full flex text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-transform duration-200 shrink-0 ${rotationClass}">
+                        <span class="material-symbols-outlined text-base">chevron_right</span>
+                    </button>
+                `;
+            } else {
+                toggleBtn = `<div class="w-5 h-5 shrink-0"></div>`;
+            }
+
+            const childrenHtml = hasChildren 
+                ? `<div class="label-children pl-3 ml-2.5 border-l border-slate-200/60 dark:border-slate-800/60 space-y-0.5 ${isExpanded ? '' : 'hidden'}">
+                       ${renderLabelTree(label.id, depth + 1)}
+                   </div>`
+                : '';
+
+            return `
+                <div class="label-node mt-0.5">
+                    <div class="flex items-center justify-between px-2 py-1 rounded-full transition-all text-sm group ${activeClass} w-full">
+                        <div class="flex items-center gap-1.5 flex-1 min-w-0">
+                            ${toggleBtn}
+                            <button onclick="filterByLabel('${label.id}')" class="flex items-center gap-2 flex-1 min-w-0 text-left py-0.5">
+                                <span class="material-symbols-outlined text-lg shrink-0" ${iconStyle}>label</span>
+                                <span class="truncate">${label.name}</span>
+                            </button>
+                        </div>
+                        <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <button onclick="event.stopPropagation(); openEditLabelDialog('${label.id}')" class="p-1 hover:bg-slate-300 dark:hover:bg-slate-700 rounded-full flex text-slate-500 hover:text-slate-700 dark:hover:text-slate-300" title="Editar">
+                                <span class="material-symbols-outlined text-xs">edit</span>
+                            </button>
+                            <button onclick="event.stopPropagation(); openDeleteLabelDialog('${label.id}')" class="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-500 rounded-full flex" title="Eliminar">
+                                <span class="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                        </div>
+                    </div>
+                    ${childrenHtml}
+                </div>
+            `;
+        }).join('');
+    };
 
     const generateHTML = () => {
         if (labels.length === 0) {
@@ -362,50 +448,7 @@ export function renderSidebarLabels() {
                 Sin etiquetas
             </div>`;
         }
-
-        const rootLabels = labels.filter(l => !l.parentId || !labels.some(p => p.id === l.parentId));
-        const subLabels = labels.filter(l => l.parentId && labels.some(p => p.id === l.parentId));
-
-        const renderLabelRow = (label, isSub = false) => {
-            const isActive = currentSection === 'label' && currentLabelFilter === label.id;
-            const activeClass = isActive 
-                ? 'bg-google-sidebarActive dark:bg-google-sidebarActiveDark text-[#001d35] dark:text-[#c2e7ff] font-semibold' 
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60';
-            const iconStyle = label.color ? `style="color: ${label.color}"` : '';
-            const indentClass = isSub ? 'ml-6 w-[calc(100%-1.5rem)]' : 'w-full';
-            const subIndicator = isSub 
-                ? `<span class="material-symbols-outlined text-base text-slate-400 dark:text-slate-500 shrink-0 select-none -mr-1">subdirectory_arrow_right</span>` 
-                : '';
-
-            return `
-                <div class="flex items-center justify-between px-3 py-1.5 rounded-full transition-all text-sm group ${activeClass} ${indentClass}">
-                    <button onclick="filterByLabel('${label.id}')" class="flex items-center gap-3 flex-1 min-w-0 text-left">
-                        ${subIndicator}
-                        <span class="material-symbols-outlined text-lg shrink-0" ${iconStyle}>label</span>
-                        <span class="truncate">${label.name}</span>
-                    </button>
-                    <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                        <button onclick="event.stopPropagation(); openEditLabelDialog('${label.id}')" class="p-1 hover:bg-slate-300 dark:hover:bg-slate-700 rounded-full flex text-slate-500 hover:text-slate-700 dark:hover:text-slate-300" title="Editar">
-                            <span class="material-symbols-outlined text-xs">edit</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); openDeleteLabelDialog('${label.id}')" class="p-1 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-500 rounded-full flex" title="Eliminar">
-                            <span class="material-symbols-outlined text-xs">delete</span>
-                        </button>
-                    </div>
-                </div>
-            `;
-        };
-
-        const htmlParts = [];
-        rootLabels.forEach(root => {
-            htmlParts.push(renderLabelRow(root, false));
-            const children = subLabels.filter(l => l.parentId === root.id);
-            children.forEach(child => {
-                htmlParts.push(renderLabelRow(child, true));
-            });
-        });
-
-        return htmlParts.join('');
+        return renderLabelTree(null, 0);
     };
 
     const htmlContent = generateHTML();
@@ -454,6 +497,56 @@ export function toggleMobileSidebar() {
     }
 }
 
+// ── Redimensionamiento manual ─────────────────────────────────
+
+/**
+ * Inicializa el redimensionamiento del sidebar mediante arrastre (drag-and-drop).
+ */
+export function initSidebarResize() {
+    const sidebar = document.getElementById('sidebar');
+    const handle = document.getElementById('sidebar-resize-handle');
+    if (!sidebar || !handle) return;
+
+    let isResizing = false;
+
+    handle.addEventListener('mousedown', (e) => {
+        // Solo clic izquierdo
+        if (e.button !== 0) return;
+        isResizing = true;
+        handle.classList.add('resizing');
+        sidebar.classList.add('no-transition');
+        document.body.classList.add('select-none');
+        document.body.style.cursor = 'col-resize';
+
+        const onMouseMove = (moveEvent) => {
+            if (!isResizing) return;
+            let newWidth = moveEvent.clientX;
+
+            // Restringir el ancho entre el mínimo de 240px y el máximo de 400px
+            if (newWidth < 240) newWidth = 240;
+            if (newWidth > 400) newWidth = 400;
+
+            // Aplicar inline styles con alta prioridad
+            sidebar.style.setProperty('width', `${newWidth}px`, 'important');
+            sidebar.style.setProperty('max-width', `${newWidth}px`, 'important');
+            sidebar.style.setProperty('min-width', `${newWidth}px`, 'important');
+        };
+
+        const onMouseUp = () => {
+            isResizing = false;
+            handle.classList.remove('resizing');
+            sidebar.classList.remove('no-transition');
+            document.body.classList.remove('select-none');
+            document.body.style.cursor = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    });
+}
+
 // ── Exposición global ─────────────────────────────────────────
 window.renderFileTree = renderFileTree;
 window.renderExpandedPostList = renderExpandedPostList;
@@ -465,3 +558,5 @@ window.toggleSidebarExpanded = toggleSidebarExpanded;
 window.setSidebarMode = setSidebarMode;
 window.renderSidebarLabels = renderSidebarLabels;
 window.updateSectionCounts = updateSectionCounts;
+window.toggleLabelCollapse = toggleLabelCollapse;
+window.initSidebarResize = initSidebarResize;

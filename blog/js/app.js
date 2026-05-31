@@ -12,7 +12,8 @@ import {
     renderExpandedPostList,
     renderSidebarLabels, 
     updateSectionCounts,
-    setSidebarMode
+    setSidebarMode,
+    initSidebarResize
 } from './componentes/sidebar.js';
 import { loadPost, setupAutoSave, showEmptyState } from './componentes/editor.js';
 import { initGithubSync } from './componentes/settings.js';
@@ -45,6 +46,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 5. Configurar el auto-guardado automático
         setupAutoSave();
+
+        // 6. Inicializar redimensionamiento del sidebar
+        initSidebarResize();
 
         console.log('[BlogApp] Inicializada con éxito.');
     } catch (error) {

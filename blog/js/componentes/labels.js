@@ -62,6 +62,50 @@ export function selectCustomLabelColor(color) {
  * Abre el diálogo para crear una nueva etiquet/**
  * Popula el select de etiqueta padre previniendo niveles de anidación profundos y dependencias circulares.
  */
+/**
+ * Obtiene todos los IDs de las subetiquetas descendientes de forma recursiva.
+ */
+function getDescendantsRecursive(labelId) {
+    const descendants = [];
+    const queue = [labelId];
+    while (queue.length > 0) {
+        const currentId = queue.shift();
+        labels.forEach(l => {
+            if (l.parentId === currentId) {
+                descendants.push(l.id);
+                queue.push(l.id);
+            }
+        });
+    }
+    return descendants;
+}
+
+/**
+ * Agrega recursivamente las opciones al selector respetando la jerarquía.
+ */
+function buildSelectTree(parentId, depth, selectElement, invalidParentIds) {
+    let levelLabels;
+    if (parentId === null) {
+        // Encontrar etiquetas raíces: sin parentId o cuyo parentId ya no exista en el arreglo global
+        levelLabels = labels.filter(l => !l.parentId || !labels.some(p => p.id === l.parentId));
+    } else {
+        levelLabels = labels.filter(l => l.parentId === parentId);
+    }
+
+    levelLabels.forEach(label => {
+        if (invalidParentIds.includes(label.id)) return;
+
+        const option = document.createElement('option');
+        option.value = label.id;
+        // Prefijo de guiones y espacios para denotar profundidad
+        const prefix = depth > 0 ? '&nbsp;&nbsp;'.repeat(depth) + '— ' : '';
+        option.innerHTML = prefix + label.name;
+        selectElement.appendChild(option);
+
+        buildSelectTree(label.id, depth + 1, selectElement, invalidParentIds);
+    });
+}
+
 function populateParentSelect(currentLabelId = null) {
     const select = document.getElementById('label-parent-select');
     const helpText = document.getElementById('label-parent-help-text');
@@ -71,26 +115,13 @@ function populateParentSelect(currentLabelId = null) {
     select.disabled = false;
     if (helpText) helpText.classList.add('hidden');
 
-    // Comprobar si la etiqueta siendo editada ya tiene subetiquetas
-    let hasChildren = false;
+    const invalidParentIds = [];
     if (currentLabelId) {
-        hasChildren = labels.some(l => l.parentId === currentLabelId);
+        invalidParentIds.push(currentLabelId);
+        invalidParentIds.push(...getDescendantsRecursive(currentLabelId));
     }
 
-    if (hasChildren) {
-        select.disabled = true;
-        if (helpText) helpText.classList.remove('hidden');
-        return;
-    }
-
-    // Listar etiquetas raíz (sin parentId) que no sean la etiqueta actual
-    const rootLabels = labels.filter(l => !l.parentId && l.id !== currentLabelId);
-    rootLabels.forEach(parentLabel => {
-        const option = document.createElement('option');
-        option.value = parentLabel.id;
-        option.textContent = parentLabel.name;
-        select.appendChild(option);
-    });
+    buildSelectTree(null, 0, select, invalidParentIds);
 }
 
 /**
@@ -357,7 +388,7 @@ export function openDeleteLabelDialog(labelId) {
     if (!backdrop || !container) return;
 
     // Obtener subetiquetas vinculadas
-    const childLabelIds = labels.filter(l => l.parentId === labelId).map(l => l.id);
+    const childLabelIds = getDescendantsRecursive(labelId);
     const labelsToDeleteIds = [labelId, ...childLabelIds];
 
     // Contar posts afectados
@@ -366,7 +397,7 @@ export function openDeleteLabelDialog(labelId) {
 
     if (message) {
         if (childLabelIds.length > 0) {
-            message.innerHTML = `¿Estás seguro de que deseas eliminar la etiqueta principal <b>"${label.name}"</b> y sus <b>${childLabelIds.length} subetiquetas</b>?<br><br>` + 
+            message.innerHTML = `¿Estás seguro de que deseas eliminar la etiqueta principal <b>"${label.name}"</b> y sus <b>${childLabelIds.length} subetiquetas</b> descendientes?<br><br>` + 
                                 (count > 0 
                                  ? `Hay <b>${count}</b> entradas vinculadas a estas etiquetas.` 
                                  : `No hay entradas vinculadas a estas etiquetas.`);
@@ -423,7 +454,7 @@ export function confirmDeleteLabel() {
     const labelName = label ? label.name : '';
 
     // Obtener subetiquetas vinculadas
-    const childLabelIds = labels.filter(l => l.parentId === labelToDeleteId).map(l => l.id);
+    const childLabelIds = getDescendantsRecursive(labelToDeleteId);
     const labelsToDeleteIds = [labelToDeleteId, ...childLabelIds];
 
     // Obtener la opción de protección de entradas seleccionada

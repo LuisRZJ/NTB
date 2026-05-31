@@ -388,13 +388,15 @@ export async function pushToGithub() {
             labels: labels
         };
 
-        await uploadBackup(
+        const newSha = await uploadBackup(
             token,
             githubSettings.repo,
             githubSettings.filepath,
             githubSettings.branch,
             backupData
         );
+
+        await saveConfig('last_backup_sha', newSha);
 
         showToast('Copia de seguridad subida con éxito a GitHub');
     } catch (e) {
@@ -439,6 +441,9 @@ export async function confirmGithubPull() {
         setLabels(backupData.labels);
         await saveLabelsToStorage();
 
+        // Guardar el SHA local de la versión que acabamos de descargar
+        await saveConfig('last_backup_sha', backupData.sha);
+
         showToast(`Base de datos restaurada: importadas ${backupData.posts.length} entradas.`);
         
         setTimeout(() => location.reload(), 1000);
@@ -463,6 +468,14 @@ async function verifyCloudVersionSilently(token) {
             githubSettings.filepath,
             githubSettings.branch
         );
+
+        if (!meta.sha) return;
+
+        // Comprobar si el archivo en la nube es idéntico al último sincronizado
+        const lastBackupSha = await getConfig('last_backup_sha');
+        if (meta.sha === lastBackupSha) {
+            return; // Son idénticos, no hay actualización pendiente
+        }
 
         if (!meta.updatedAt) return;
 

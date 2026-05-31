@@ -2892,6 +2892,7 @@ async function pushToGithub() {
     _backupSha = newSha;
     _dataDirty = false;
     await dbSetMeta('lastBackupTime', backupData.exported);
+    await dbSetMeta('last_backup_sha', newSha);
     
     const t = new Date();
     const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
@@ -2943,6 +2944,16 @@ async function verifyCloudVersionSilently(token, forcePrompt = false) {
     }
 
     _backupSha = meta.sha;
+
+    // Comprobar si el archivo en la nube es idéntico al último sincronizado
+    const lastBackupSha = await dbGetMeta('last_backup_sha');
+    if (meta.sha === lastBackupSha && !forcePrompt) {
+      const t = new Date(meta.updatedAt ? new Date(meta.updatedAt).getTime() : Date.now());
+      const timeStr = t.toLocaleString('es', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      setCloudStatus('Sincronizado · ' + timeStr, 'ok');
+      return; // Son idénticos, no hay actualización pendiente
+    }
+
     const lastSynced = await dbGetMeta('lastBackupTime');
     const cloudTime = meta.updatedAt ? new Date(meta.updatedAt).getTime() : 0;
     const localTime = lastSynced ? new Date(lastSynced).getTime() : 0;
@@ -2987,6 +2998,7 @@ function showSyncModal(remote) {
     try {
       const count2 = await restoreFromPayload(remote.content);
       await dbSetMeta('lastBackupTime', remote.content.exported || remote.updatedAt);
+      await dbSetMeta('last_backup_sha', remote.sha);
       setCloudStatus('Restaurado desde la nube', 'ok');
       showToast('☁ ' + count2 + ' tareas restauradas');
       

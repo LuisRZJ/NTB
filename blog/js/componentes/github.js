@@ -85,7 +85,8 @@ export async function downloadBackup(token, repo, filepath, branch = 'main') {
     return {
         posts: backupData.posts || [],
         labels: backupData.labels || [],
-        updatedAt: meta.updatedAt || new Date().toISOString()
+        updatedAt: meta.updatedAt || new Date().toISOString(),
+        sha: meta.sha
     };
 }
 
@@ -132,4 +133,7 @@ export async function uploadBackup(token, repo, filepath, branch = 'main', backu
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.message || `Error HTTP ${response.status} al subir respaldo`);
     }
+    
+    const resData = await response.json();
+    return resData.content.sha;
 }

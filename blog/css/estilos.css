@@ -675,27 +675,38 @@ button[onclick*="toggleLabelCollapse"] {
 #sidebar-resize-handle {
     position: absolute;
     top: 0;
-    right: 0;
-    width: 6px;
+    right: 0; /* Alinear con el borde derecho del sidebar */
+    width: 12px; /* Ancho cómodo para pasar el mouse */
     height: 100%;
     cursor: col-resize;
     z-index: 50;
     background-color: transparent;
+    display: none; /* Oculto por defecto en móvil */
+}
+
+/* Pseudo-elemento para dibujar la línea azul precisa en el borde */
+#sidebar-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0; /* Posicionada exactamente sobre el borde derecho */
+    width: 2px;
+    height: 100%;
+    background-color: transparent;
     transition: background-color 0.2s ease;
 }
 
-#sidebar-resize-handle:hover,
-#sidebar-resize-handle.resizing {
-    background-color: rgba(26, 115, 232, 0.35); /* Google Blue con transparencia */
+#sidebar-resize-handle:hover::after,
+#sidebar-resize-handle.resizing::after {
+    background-color: #1a73e8; /* Azul Google */
 }
 
-/* Ocultar el redimensionador en pantalla completa y en móvil */
-#sidebar.sidebar-expanded #sidebar-resize-handle {
-    display: none !important;
-}
-
-@media (max-width: 767px) {
+/* Mostrar únicamente en pantallas md y superiores cuando no esté expandido */
+@media (min-width: 768px) {
     #sidebar-resize-handle {
+        display: block;
+    }
+    #sidebar.sidebar-expanded #sidebar-resize-handle {
         display: none !important;
     }
 }

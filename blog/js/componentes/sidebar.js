@@ -53,7 +53,9 @@ function getFilteredPosts() {
             if (a.pinned && !b.pinned) return -1;
             if (!a.pinned && b.pinned) return 1;
         }
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        const titleA = a.title || '';
+        const titleB = b.title || '';
+        return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
     });
 
     return filtered;
@@ -384,6 +386,8 @@ export function renderSidebarLabels() {
             levelLabels = labels.filter(l => l.parentId === parentId);
         }
 
+        levelLabels.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
         if (levelLabels.length === 0) return '';
 
         return levelLabels.map(label => {
@@ -520,7 +524,8 @@ export function initSidebarResize() {
 
         const onMouseMove = (moveEvent) => {
             if (!isResizing) return;
-            let newWidth = moveEvent.clientX;
+            const rect = sidebar.getBoundingClientRect();
+            let newWidth = moveEvent.clientX - rect.left;
 
             // Restringir el ancho entre el mínimo de 240px y el máximo de 400px
             if (newWidth < 240) newWidth = 240;

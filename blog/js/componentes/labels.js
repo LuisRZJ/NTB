@@ -92,6 +92,8 @@ function buildSelectTree(parentId, depth, selectElement, invalidParentIds) {
         levelLabels = labels.filter(l => l.parentId === parentId);
     }
 
+    levelLabels.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
     levelLabels.forEach(label => {
         if (invalidParentIds.includes(label.id)) return;
 

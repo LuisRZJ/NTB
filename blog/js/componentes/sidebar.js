@@ -430,6 +430,11 @@ export function renderSidebarLabels() {
                    </div>`
                 : '';
 
+            const postCount = posts.filter(p => !p.trashed && !p.archived && p.labels && p.labels.includes(label.id)).length;
+            const badgeHtml = (sidebarExpanded && postCount > 0)
+                ? `<span class="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-300/40 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 shrink-0">${postCount}</span>`
+                : '';
+
             return `
                 <div class="label-node mt-0.5">
                     <div class="flex items-center justify-between px-2 py-1 rounded-full transition-all text-sm group ${activeClass} w-full">
@@ -438,6 +443,7 @@ export function renderSidebarLabels() {
                             <button onclick="filterByLabel('${label.id}')" class="flex items-center gap-2 flex-1 min-w-0 text-left py-0.5">
                                 <span class="material-symbols-outlined text-lg shrink-0" ${iconStyle}>label</span>
                                 <span class="truncate">${label.name}</span>
+                                ${badgeHtml}
                             </button>
                         </div>
                         <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">

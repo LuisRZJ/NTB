@@ -214,17 +214,75 @@ export async function initGithubSync() {
         }
 
         githubSettings = settings;
-        
-        // Restaurar estado si ya se inició en esta sesión
+
+        // Rellenar siempre los campos básicos para que estén visibles
+        fillGithubUIFields();
+
+        // 1. Verificar si hay sesión en sessionStorage primero
         const sessionToken = sessionStorage.getItem('github_token');
-        if (sessionToken) {
+        const sessionPass = sessionStorage.getItem('github_sync_pass');
+
+        if (sessionToken && sessionPass) {
             updateGithubUIState('connected');
             fillGithubUIFields();
             verifyCloudVersionSilently(sessionToken);
-        } else {
-            updateGithubUIState('locked');
-            const backdrop = document.getElementById('github-decrypt-backdrop');
-            if (backdrop) backdrop.classList.remove('hidden');
+            return;
+        }
+
+        // 2. Si no hay sesión en sessionStorage, verificar localStorage para autologin de 15 días
+        const storedPass = localStorage.getItem('github_sync_pass');
+        const savedAtStr = localStorage.getItem('github_sync_pass_saved_at');
+
+        if (storedPass && savedAtStr) {
+            const savedAt = parseInt(savedAtStr, 10) || 0;
+            const fifteenDaysMs = 15 * 24 * 60 * 60 * 1000;
+            const isExpired = (Date.now() - savedAt) >= fifteenDaysMs;
+
+            if (!isExpired) {
+                try {
+                    // Intentar descifrar automáticamente
+                    const token = await decryptText(githubSettings.encryptedToken, storedPass);
+                    
+                    // Guardar en sessionStorage para la sesión activa
+                    sessionStorage.setItem('github_token', token);
+                    sessionStorage.setItem('github_sync_pass', storedPass);
+
+                    updateGithubUIState('connected');
+                    fillGithubUIFields();
+                    verifyCloudVersionSilently(token);
+                    return; // Autologin exitoso
+                } catch (decryptErr) {
+                    console.warn('[Settings] Error al descifrar automáticamente con clave de localStorage:', decryptErr);
+                }
+            } else {
+                // Ha expirado el plazo de 15 días
+                updateGithubUIState('locked');
+                const backdrop = document.getElementById('github-decrypt-backdrop');
+                if (backdrop) backdrop.classList.remove('hidden');
+
+                // Hacer modal no-cerrable
+                const skipBtn = document.getElementById('github-skip-decrypt-btn');
+                if (skipBtn) skipBtn.classList.add('hidden');
+
+                const subtitle = document.getElementById('github-decrypt-subtitle');
+                if (subtitle) {
+                    subtitle.innerHTML = '<strong>Tu confirmación periódica de 15 días ha expirado.</strong> Por favor, reintroduce tu contraseña maestra para continuar sincronizando.';
+                }
+                return;
+            }
+        }
+
+        // 3. Si no hay autologin configurado o falló, mostrar modal normal
+        updateGithubUIState('locked');
+        const backdrop = document.getElementById('github-decrypt-backdrop');
+        if (backdrop) backdrop.classList.remove('hidden');
+        
+        const skipBtn = document.getElementById('github-skip-decrypt-btn');
+        if (skipBtn) skipBtn.classList.remove('hidden');
+
+        const subtitle = document.getElementById('github-decrypt-subtitle');
+        if (subtitle) {
+            subtitle.textContent = 'Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.';
         }
     } catch (e) {
         console.error('[Settings] Error al inicializar GitHub Sync:', e);
@@ -236,10 +294,18 @@ function fillGithubUIFields() {
     const repoInput = document.getElementById('github-repo-input');
     const branchInput = document.getElementById('github-branch-input');
     const pathInput = document.getElementById('github-path-input');
+    const tokenInput = document.getElementById('github-token-input');
+    const passInput = document.getElementById('github-pass-input');
 
     if (repoInput) repoInput.value = githubSettings.repo || '';
     if (branchInput) branchInput.value = githubSettings.branch || 'main';
     if (pathInput) pathInput.value = githubSettings.filepath || 'ntb-backup.json';
+
+    const sessionToken = sessionStorage.getItem('github_token');
+    const sessionPass = sessionStorage.getItem('github_sync_pass');
+    
+    if (tokenInput && sessionToken) tokenInput.value = sessionToken;
+    if (passInput && sessionPass) passInput.value = sessionPass;
 }
 
 export async function submitGithubDecrypt() {
@@ -262,9 +328,21 @@ export async function submitGithubDecrypt() {
         sessionStorage.setItem('github_token', token);
         sessionStorage.setItem('github_sync_pass', password);
 
+        // Guardar de forma persistente en localStorage para el ciclo de 15 días
+        localStorage.setItem('github_sync_pass', password);
+        localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
+
         const backdrop = document.getElementById('github-decrypt-backdrop');
         if (backdrop) backdrop.classList.add('hidden');
         if (errorMsg) errorMsg.classList.add('hidden');
+
+        // Restaurar estado del modal por si se abre de nuevo en el futuro
+        const skipBtn = document.getElementById('github-skip-decrypt-btn');
+        if (skipBtn) skipBtn.classList.remove('hidden');
+        const subtitle = document.getElementById('github-decrypt-subtitle');
+        if (subtitle) {
+            subtitle.textContent = 'Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.';
+        }
 
         showToast('Credenciales descifradas e inicio de sesión exitoso');
         updateGithubUIState('connected');
@@ -321,7 +399,7 @@ export async function saveGithubSettings() {
     }
 
     if (!passwordToUse) {
-        passwordToUse = sessionStorage.getItem('github_sync_pass') || '';
+        passwordToUse = sessionStorage.getItem('github_sync_pass') || localStorage.getItem('github_sync_pass') || '';
     }
 
     if (!passwordToUse) {
@@ -350,11 +428,13 @@ export async function saveGithubSettings() {
         sessionStorage.setItem('github_token', tokenToEncrypt);
         sessionStorage.setItem('github_sync_pass', passwordToUse);
 
-        if (tokenInput) tokenInput.value = '';
-        if (passInput) passInput.value = '';
+        // Guardar también en localStorage para los 15 días
+        localStorage.setItem('github_sync_pass', passwordToUse);
+        localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
 
         showToast('Configuración de GitHub guardada con éxito.');
         updateGithubUIState('connected');
+        fillGithubUIFields();
         
         if (meta.updatedAt) {
             verifyCloudVersionSilently(tokenToEncrypt);
@@ -537,3 +617,17 @@ window.pullFromGithub = pullFromGithub;
 window.confirmGithubPull = confirmGithubPull;
 window.skipGithubUpdate = skipGithubUpdate;
 window.initGithubSync = initGithubSync;
+
+export function toggleFieldVisibility(inputId, button) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const icon = button.querySelector('.material-symbols-outlined');
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (icon) icon.textContent = 'visibility_off';
+    } else {
+        input.type = 'password';
+        if (icon) icon.textContent = 'visibility';
+    }
+}
+window.toggleFieldVisibility = toggleFieldVisibility;

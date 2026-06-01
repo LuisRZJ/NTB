@@ -215,10 +215,19 @@ body {
     position: relative;
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
                 flex-shrink 0.3s ease;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 #sidebar.no-transition {
     transition: none !important;
+}
+
+/* Evitar scrollbars dobles en el sidebar, el aside gestiona el scroll */
+#sidebar #sidebar-inner {
+    overflow: visible !important;
+    min-height: auto !important;
+    flex: none !important;
 }
 
 /* Ocultar sidebar en móviles si no está expandido en pantalla completa */
@@ -234,8 +243,6 @@ body {
     max-width: 100vw !important;
     flex-shrink: 0;
     border-right: none !important;
-    /* El aside mismo hace el scroll en modo expandido */
-    overflow-y: auto;
     height: auto !important;
     min-height: 100vh;
 }
@@ -244,13 +251,6 @@ body {
 #sidebar.sidebar-expanded #sidebar-labels-container {
     max-height: none !important;
     overflow: visible !important;
-}
-
-/* En modo expandido, el div interno no restringe la altura ni hace scroll propio */
-#sidebar.sidebar-expanded #sidebar-inner {
-    overflow: visible !important;
-    min-height: auto !important;
-    flex: none !important;
 }
 
 /* El árbol de entradas expandido tampoco tiene scroll propio */
@@ -720,4 +720,22 @@ button[onclick*="toggleLabelCollapse"] {
 .truncate.scrolling-active:hover {
     text-indent: var(--scroll-dist, 0px) !important;
     text-overflow: clip !important;
+}
+
+/* Estado activo para los botones del toolbar de formato */
+.toolbar-btn-active {
+    background-color: #c2e7ff !important; /* Google Blue claro */
+    color: #001d35 !important;
+}
+
+.dark .toolbar-btn-active {
+    background-color: #004a77 !important;
+    color: #c2e7ff !important;
+}
+
+/* Enlaces internos del editor */
+.editor-internal-link {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dashed;
 }

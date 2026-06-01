@@ -15,7 +15,7 @@ import {
     setSidebarMode,
     initSidebarResize
 } from './componentes/sidebar.js';
-import { loadPost, setupAutoSave, showEmptyState } from './componentes/editor.js';
+import { loadPost, setupAutoSave, showEmptyState, initToolbarStateObserver } from './componentes/editor.js';
 import { initGithubSync } from './componentes/settings.js';
 
 // Importación para registrar funciones en window
@@ -52,6 +52,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 7. Inicializar efecto marquee sobre elementos truncados
         initTextMarqueeHover();
+
+        // 8. Inicializar el observador del toolbar de Markdown y enlaces
+        initToolbarStateObserver();
 
         console.log('[BlogApp] Inicializada con éxito.');
     } catch (error) {

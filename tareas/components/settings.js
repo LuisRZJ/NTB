@@ -182,7 +182,12 @@ document.getElementById('settings-mount').innerHTML = `
 
           <div class="settings-field">
             <label class="settings-label" for="github-token-input">Personal Access Token (PAT)</label>
-            <input class="settings-input" id="github-token-input" type="password" placeholder="ghp_..." autocomplete="off"/>
+            <div class="relative" style="position: relative; width: 100%; box-sizing: border-box;">
+              <input class="settings-input" id="github-token-input" type="password" placeholder="ghp_..." autocomplete="off" style="width: 100%; padding-right: 36px; box-sizing: border-box;"/>
+              <button type="button" onclick="toggleFieldVisibility('github-token-input', this)" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0;">
+                <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
+              </button>
+            </div>
           </div>
 
           <div class="settings-field" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
@@ -198,7 +203,12 @@ document.getElementById('settings-mount').innerHTML = `
 
           <div class="settings-field">
             <label class="settings-label" for="github-pass-input">Contraseña Maestra de Cifrado</label>
-            <input class="settings-input" id="github-pass-input" type="password" placeholder="Clave para encriptar local" autocomplete="off"/>
+            <div class="relative" style="position: relative; width: 100%; box-sizing: border-box;">
+              <input class="settings-input" id="github-pass-input" type="password" placeholder="Clave para encriptar local" autocomplete="off" style="width: 100%; padding-right: 36px; box-sizing: border-box;"/>
+              <button type="button" onclick="toggleFieldVisibility('github-pass-input', this)" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0;">
+                <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
+              </button>
+            </div>
           </div>
 
           <div class="cloud-status-row" style="margin-top: 6px; display: flex; align-items: center; justify-content: space-between;">

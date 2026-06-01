@@ -20,6 +20,67 @@ let lastSavedTitle = '';
 let lastSavedContent = '';
 let lastSnapshotTime = 0;
 
+let currentColorCommand = null;
+let lastColorSelectionRange = null;
+let lastInternalLinkSelectionRange = null;
+let lastTableSelectionRange = null;
+let activeTableCell = null;
+
+const FORMAT_COLORS = [
+    { name: 'Negro', hex: '#000000' },
+    { name: 'Gris Oscuro', hex: '#4b5563' },
+    { name: 'Gris Claro', hex: '#d1d5db' },
+    { name: 'Blanco', hex: '#ffffff' },
+    { name: 'Rojo', hex: '#ef4444' },
+    { name: 'Rojo Pastel', hex: '#fee2e2' },
+    { name: 'Naranja', hex: '#f97316' },
+    { name: 'Amarillo', hex: '#eab308' },
+    { name: 'Amarillo Pastel', hex: '#fef9c3' },
+    { name: 'Verde', hex: '#22c55e' },
+    { name: 'Verde Pastel', hex: '#dcfce7' },
+    { name: 'Azul', hex: '#3b82f6' },
+    { name: 'Azul Pastel', hex: '#dbeafe' },
+    { name: 'Púrpura', hex: '#a855f7' },
+    { name: 'Rosa', hex: '#ec4899' }
+];
+
+function colorsMatch(c1, c2) {
+    if (!c1 || !c2) return false;
+    c1 = c1.trim().toLowerCase();
+    c2 = c2.trim().toLowerCase();
+    if (c1 === c2) return true;
+    
+    const toRgb = (color) => {
+        if (color.startsWith('rgb')) {
+            return color.replace(/\s+/g, '');
+        }
+        if (color.startsWith('#')) {
+            const hex = color.replace('#', '');
+            let r, g, b;
+            if (hex.length === 3) {
+                r = parseInt(hex[0] + hex[0], 16);
+                g = parseInt(hex[1] + hex[1], 16);
+                b = parseInt(hex[2] + hex[2], 16);
+            } else if (hex.length === 6) {
+                r = parseInt(hex.substring(0, 2), 16);
+                g = parseInt(hex.substring(2, 4), 16);
+                b = parseInt(hex.substring(4, 6), 16);
+            } else {
+                return color;
+            }
+            return `rgb(${r},${g},${b})`;
+        }
+        return color;
+    };
+    
+    const r1 = toRgb(c1);
+    const r2 = toRgb(c2);
+    const isTransparent = (val) => val === 'transparent' || val === 'rgba(0,0,0,0)' || val === 'rgba(0, 0, 0, 0)';
+    if (isTransparent(r1) && isTransparent(r2)) return true;
+    
+    return r1 === r2;
+}
+
 /**
  * Muestra el editor y oculta el estado vacío.
  */
@@ -129,6 +190,9 @@ export function loadPost(id) {
 
     // Aplicar fondo personalizado
     updateEditorBackgroundUI(post);
+
+    // Aplicar foto de portada
+    updateEditorCoverUI(post);
 
     // Resaltar en el árbol (colapsado y expandido)
     document.querySelectorAll('.file-tree-item').forEach(item => {
@@ -357,37 +421,67 @@ function updateFileTreeItemUI(post) {
  * @param {string} value 
  */
 export function formatDoc(command, value = null) {
+    if (command === 'formatBlock') {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            let node = selection.getRangeAt(0).startContainer;
+            if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+            const activeBlock = node.closest(value);
+            if (activeBlock) {
+                // Si el formato ya está activo, cambiar a un párrafo normal (p) para desaplicar
+                document.execCommand('formatBlock', false, 'p');
+                triggerEditorInput();
+                return;
+            }
+        }
+    }
     document.execCommand(command, false, value);
-    // Disparar evento input para activar auto-guardado
+    triggerEditorInput();
+}
+
+function triggerEditorInput() {
     const docContent = document.getElementById('doc-content');
     if (docContent) {
         docContent.dispatchEvent(new Event('input'));
     }
+    updateToolbarState();
 }
 
-/**
- * Aplica formato de código en línea a la selección.
- */
 export function formatInlineCode() {
     const selection = window.getSelection();
     if (!selection.rangeCount) return;
     const range = selection.getRangeAt(0);
+    
+    let node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+    
+    const codeNode = node.closest('code');
+    // Verificar que no sea un bloque de código (que está envuelto en PRE)
+    if (codeNode && (!codeNode.parentNode || codeNode.parentNode.tagName !== 'PRE')) {
+        // Alternar (Desaplicar): quitar la etiqueta code y reestablecer texto
+        const textNode = document.createTextNode(codeNode.textContent);
+        codeNode.parentNode.replaceChild(textNode, codeNode);
+        
+        const newRange = document.createRange();
+        newRange.selectNodeContents(textNode);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+        triggerEditorInput();
+        return;
+    }
+    
     const selectedText = range.toString();
     if (selectedText) {
         const codeElement = document.createElement('code');
         codeElement.textContent = selectedText;
         range.deleteContents();
         range.insertNode(codeElement);
-        // Colocar el cursor al final del nuevo elemento
         range.setStartAfter(codeElement);
         range.setEndAfter(codeElement);
         selection.removeAllRanges();
         selection.addRange(range);
-        
-        const docContent = document.getElementById('doc-content');
-        if (docContent) docContent.dispatchEvent(new Event('input'));
+        triggerEditorInput();
     } else {
-        // Si no hay selección, insertar un fragmento vacío para escribir
         const codeElement = document.createElement('code');
         codeElement.innerHTML = 'código';
         range.insertNode(codeElement);
@@ -397,15 +491,34 @@ export function formatInlineCode() {
     }
 }
 
-/**
- * Inserta un bloque de código (pre).
- */
 export function formatCodeBlock() {
     const selection = window.getSelection();
     if (!selection.rangeCount) return;
     const range = selection.getRangeAt(0);
-    const selectedText = range.toString() || 'Bloque de código...';
     
+    let node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+    
+    const preNode = node.closest('pre');
+    if (preNode) {
+        // Alternar (Desaplicar): desarmar el bloque de código en párrafos normales
+        const codeNode = preNode.querySelector('code');
+        const text = codeNode ? codeNode.textContent : preNode.textContent;
+        
+        const lines = text.split('\n');
+        const fragment = document.createDocumentFragment();
+        lines.forEach(line => {
+            const p = document.createElement('p');
+            p.textContent = line || '\u00A0';
+            fragment.appendChild(p);
+        });
+        
+        preNode.parentNode.replaceChild(fragment, preNode);
+        triggerEditorInput();
+        return;
+    }
+    
+    const selectedText = range.toString() || 'Bloque de código...';
     const pre = document.createElement('pre');
     const code = document.createElement('code');
     code.textContent = selectedText;
@@ -414,7 +527,6 @@ export function formatCodeBlock() {
     range.deleteContents();
     range.insertNode(pre);
     
-    // Insertar un párrafo vacío después para facilitar seguir escribiendo
     const p = document.createElement('p');
     p.innerHTML = '<br>';
     pre.after(p);
@@ -423,9 +535,188 @@ export function formatCodeBlock() {
     range.setEndAfter(p);
     selection.removeAllRanges();
     selection.addRange(range);
-    
+    triggerEditorInput();
+}
+
+/**
+ * Inserta un enlace pidiendo el texto y la URL, haciéndolo funcional.
+ */
+export function insertLink() {
+    const selection = window.getSelection();
+    let selectedText = '';
+    if (selection.rangeCount > 0) {
+        selectedText = selection.toString();
+    }
+
+    const url = prompt('Introduce la URL del enlace:');
+    if (!url) return;
+
+    let formattedUrl = url.trim();
+    if (!/^https?:\/\//i.test(formattedUrl)) {
+        formattedUrl = 'https://' + formattedUrl;
+    }
+
+    const text = prompt('Texto a mostrar:', selectedText || url) || url;
+
+    const a = document.createElement('a');
+    a.href = formattedUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = text;
+    a.className = 'editor-link hover:underline text-google-blue dark:text-google-blueDark';
+
+    if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(a);
+        
+        range.setStartAfter(a);
+        range.setEndAfter(a);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    } else {
+        const range = selection.getRangeAt(0);
+        range.insertNode(a);
+        range.setStartAfter(a);
+        range.setEndAfter(a);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    triggerEditorInput();
+}
+
+/**
+ * Actualiza el estado activo de los botones en la barra de herramientas.
+ */
+export function updateToolbarState() {
     const docContent = document.getElementById('doc-content');
-    if (docContent) docContent.dispatchEvent(new Event('input'));
+    if (!docContent) return;
+
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return;
+
+    let range = selection.getRangeAt(0);
+    let node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) {
+        node = node.parentNode;
+    }
+
+    if (!docContent.contains(node)) return;
+
+    const states = {
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        strikethrough: document.queryCommandState('strikethrough'),
+        insertUnorderedList: document.queryCommandState('insertUnorderedList'),
+        insertOrderedList: document.queryCommandState('insertOrderedList'),
+        h1: false,
+        h2: false,
+        h3: false,
+        blockquote: false,
+        code: false,
+        pre: false,
+        link: false,
+        textColor: false,
+        highlightColor: false
+    };
+
+    let current = node;
+    while (current && current !== docContent) {
+        const tag = current.tagName;
+        if (tag === 'H1') states.h1 = true;
+        if (tag === 'H2') states.h2 = true;
+        if (tag === 'H3') states.h3 = true;
+        if (tag === 'BLOCKQUOTE') states.blockquote = true;
+        if (tag === 'CODE') {
+            if (current.parentNode && current.parentNode.tagName === 'PRE') {
+                states.pre = true;
+            } else {
+                states.code = true;
+            }
+        }
+        if (tag === 'PRE') states.pre = true;
+        if (tag === 'A') states.link = true;
+        
+        // Comprobar si hay colores aplicados inline
+        if (current.style && current.style.color && current.style.color !== 'inherit' && current.style.color !== 'initial') {
+            states.textColor = true;
+        }
+        if (current.tagName === 'FONT' && current.hasAttribute('color') && current.getAttribute('color') !== 'inherit') {
+            states.textColor = true;
+        }
+        if (current.style && current.style.backgroundColor && current.style.backgroundColor !== 'transparent' && current.style.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+            states.highlightColor = true;
+        }
+        
+        current = current.parentNode;
+    }
+
+    updateButtonState('btn-bold', states.bold);
+    updateButtonState('btn-italic', states.italic);
+    updateButtonState('btn-underline', states.underline);
+    updateButtonState('btn-strikethrough', states.strikethrough);
+    updateButtonState('btn-text-color', states.textColor);
+    updateButtonState('btn-highlight-color', states.highlightColor);
+    updateButtonState('btn-unordered-list', states.insertUnorderedList);
+    updateButtonState('btn-ordered-list', states.insertOrderedList);
+    updateButtonState('btn-h1', states.h1);
+    updateButtonState('btn-h2', states.h2);
+    updateButtonState('btn-h3', states.h3);
+    updateButtonState('btn-blockquote', states.blockquote);
+    updateButtonState('btn-inline-code', states.code);
+    updateButtonState('btn-code-block', states.pre);
+    updateButtonState('btn-link', states.link);
+
+    // Actualizar barra de herramientas contextual de tablas
+    updateTableContextToolbar();
+}
+
+function updateButtonState(id, isActive) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    if (isActive) {
+        btn.classList.add('toolbar-btn-active');
+    } else {
+        btn.classList.remove('toolbar-btn-active');
+    }
+}
+
+/**
+ * Inicializa el observador de la barra de herramientas y la navegación de enlaces.
+ */
+export function initToolbarStateObserver() {
+    document.addEventListener('selectionchange', updateToolbarState);
+    
+    // Configurar enlaces funcionales al hacer clic dentro del editor
+    const docContent = document.getElementById('doc-content');
+    if (docContent) {
+        docContent.addEventListener('click', (e) => {
+            const a = e.target.closest('a');
+            if (a) {
+                const postId = a.getAttribute('data-post-id');
+                if (postId) {
+                    window.loadPost(postId);
+                } else {
+                    window.open(a.href, '_blank');
+                }
+                e.preventDefault();
+            }
+        });
+    }
+
+    // Ocultar barra de tabla al hacer scroll
+    const scrollContainer = document.querySelector('.flex-1.overflow-y-auto') || document.getElementById('main-workspace');
+    if (scrollContainer) {
+        scrollContainer.addEventListener('scroll', () => {
+            const toolbar = document.getElementById('table-context-toolbar');
+            if (toolbar) {
+                toolbar.classList.add('hidden');
+                activeTableCell = null;
+            }
+        });
+    }
 }
 
 /**
@@ -489,58 +780,62 @@ export function insertImage() {
 }
 
 /**
- * Inserta una tabla interactiva pidiendo dimensiones.
+ * Inserta una tabla de un tamaño específico.
  */
-export function insertTable() {
-    const rowsInput = prompt('Número de filas:', '3');
-    const colsInput = prompt('Número de columnas:', '3');
-    
-    const rows = parseInt(rowsInput || '0');
-    const cols = parseInt(colsInput || '0');
-    
-    if (rows > 0 && cols > 0) {
-        let html = '<table class="w-full my-4 border-collapse border border-slate-200 dark:border-slate-800 text-sm">';
-        // Cabecera
-        html += '<thead><tr class="bg-slate-100 dark:bg-slate-800/50">';
-        for (let c = 0; c < cols; c++) {
-            html += `<th class="border border-slate-200 dark:border-slate-800 px-3 py-2 font-semibold text-left">Cabecera ${c+1}</th>`;
-        }
-        html += '</tr></thead><tbody>';
-        // Filas
-        for (let r = 0; r < rows; r++) {
-            html += '<tr>';
-            for (let c = 0; c < cols; c++) {
-                html += `<td class="border border-slate-200 dark:border-slate-800 px-3 py-2">Fila ${r+1} Col ${c+1}</td>`;
-            }
-            html += '</tr>';
-        }
-        html += '</tbody></table><p><br></p>';
-        
+export function insertTableWithSize(rows, cols) {
+    closeTableGridSelector();
+
+    // Restaurar selección
+    if (lastTableSelectionRange) {
         const selection = window.getSelection();
-        if (selection.rangeCount) {
-            const range = selection.getRangeAt(0);
-            const wrapper = document.createElement('div');
-            wrapper.innerHTML = html;
-            range.deleteContents();
-            
-            // Insertar los elementos de la tabla
-            let lastNode = null;
-            while (wrapper.firstChild) {
-                lastNode = wrapper.firstChild;
-                range.insertNode(lastNode);
-            }
-            
-            if (lastNode) {
-                range.setStartAfter(lastNode);
-                range.setEndAfter(lastNode);
-                selection.removeAllRanges();
-                selection.addRange(range);
-            }
-            
-            const docContent = document.getElementById('doc-content');
-            if (docContent) docContent.dispatchEvent(new Event('input'));
-        }
+        selection.removeAllRanges();
+        selection.addRange(lastTableSelectionRange);
     }
+
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return;
+
+    let html = '<table class="w-full my-4 border-collapse border border-slate-200 dark:border-slate-800 text-sm">';
+    // Cabecera (thead)
+    html += '<thead><tr class="bg-slate-100 dark:bg-slate-800/50">';
+    for (let c = 1; c <= cols; c++) {
+        html += `<th class="border border-slate-200 dark:border-slate-800 px-3 py-2 font-semibold text-left">Cabecera ${c}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    // Filas (tbody)
+    for (let r = 1; r <= rows; r++) {
+        html += '<tr>';
+        for (let c = 1; c <= cols; c++) {
+            html += `<td class="border border-slate-200 dark:border-slate-800 px-3 py-2"><br></td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table><p><br></p>';
+
+    const range = selection.getRangeAt(0);
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    range.deleteContents();
+    
+    let lastNode = null;
+    while (wrapper.firstChild) {
+        lastNode = wrapper.firstChild;
+        range.insertNode(lastNode);
+    }
+    
+    if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.setEndAfter(lastNode);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    // Enfocar editor y notificar
+    const docContent = document.getElementById('doc-content');
+    if (docContent) {
+        docContent.focus();
+    }
+    triggerEditorInput();
 }
 
 /**
@@ -1148,36 +1443,45 @@ export function openPostLabelSelector() {
     if (labels.length === 0) {
         selector.innerHTML = '<p class="text-xs text-slate-400 dark:text-slate-500 text-center py-2">No hay etiquetas creadas</p>';
     } else {
-        const rootLabels = labels.filter(l => !l.parentId || !labels.some(p => p.id === l.parentId));
-        const subLabels = labels.filter(l => l.parentId && labels.some(p => p.id === l.parentId));
+        const renderLabelOptionRecursive = (parentId = null, depth = 0) => {
+            let levelLabels;
+            if (parentId === null) {
+                levelLabels = labels.filter(l => !l.parentId || !labels.some(p => p.id === l.parentId));
+            } else {
+                levelLabels = labels.filter(l => l.parentId === parentId);
+            }
 
-        const addLabelCheckbox = (label, isSub = false) => {
-            const isChecked = post.labels && post.labels.includes(label.id);
-            const item = document.createElement('label');
-            
-            const indentStyle = isSub ? 'pl-6' : '';
-            const subIndicator = isSub 
-                ? `<span class="material-symbols-outlined text-[15px] text-slate-400 dark:text-slate-500 shrink-0 select-none -mr-1">subdirectory_arrow_right</span>` 
-                : '';
+            levelLabels.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+            levelLabels.forEach(label => {
+                const isChecked = post.labels && post.labels.includes(label.id);
+                const item = document.createElement('label');
                 
-            item.className = `flex items-center gap-2 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer select-none text-sm text-slate-700 dark:text-slate-200 ${indentStyle}`;
-            item.innerHTML = `
-                ${subIndicator}
-                <input type="checkbox" class="rounded text-google-blue border-slate-300 focus:ring-google-blue shrink-0" 
-                       ${isChecked ? 'checked' : ''} 
-                       onchange="togglePostLabel('${label.id}', this.checked)">
-                <span class="truncate">${label.name}</span>
-            `;
-            selector.appendChild(item);
+                // Indentación: 1.25rem por nivel de profundidad
+                const indentStyle = depth > 0 ? `padding-left: ${depth * 1.25}rem;` : '';
+                const subIndicator = depth > 0 
+                    ? `<span class="material-symbols-outlined text-[15px] text-slate-400 dark:text-slate-500 shrink-0 select-none -mr-1">subdirectory_arrow_right</span>` 
+                    : '';
+                    
+                item.className = 'flex items-center gap-2 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer select-none text-sm text-slate-700 dark:text-slate-200';
+                if (indentStyle) {
+                    item.style.cssText = indentStyle;
+                }
+                item.innerHTML = `
+                    ${subIndicator}
+                    <input type="checkbox" class="rounded text-google-blue border-slate-300 focus:ring-google-blue shrink-0" 
+                           ${isChecked ? 'checked' : ''} 
+                           onchange="togglePostLabel('${label.id}', this.checked)">
+                    <span class="truncate">${label.name}</span>
+                `;
+                selector.appendChild(item);
+
+                // Llamada recursiva para los hijos
+                renderLabelOptionRecursive(label.id, depth + 1);
+            });
         };
 
-        rootLabels.forEach(root => {
-            addLabelCheckbox(root, false);
-            const children = subLabels.filter(l => l.parentId === root.id);
-            children.forEach(child => {
-                addLabelCheckbox(child, true);
-            });
-        });
+        renderLabelOptionRecursive(null, 0);
     }
 
     // Mostrar temporalmente para medir
@@ -1222,10 +1526,7 @@ export function togglePostLabel(labelId, isChecked) {
     if (!currentPostId) return;
     const post = posts.find(p => p.id === currentPostId);
     if (!post || post.trashed) return;
-
-    if (!post.labels) post.labels = [];
-
-    if (isChecked) {
+        if (isChecked) {
         if (!post.labels.includes(labelId)) {
             post.labels.push(labelId);
         }
@@ -1248,7 +1549,10 @@ window.formatInlineCode = formatInlineCode;
 window.formatCodeBlock = formatCodeBlock;
 window.insertTaskList = insertTaskList;
 window.insertImage = insertImage;
-window.insertTable = insertTable;
+window.insertTable = openTableGridSelector;
+window.insertLink = insertLink;
+window.initToolbarStateObserver = initToolbarStateObserver;
+window.updateToolbarState = updateToolbarState;
 window.toggleCurrentPostPin = toggleCurrentPostPin;
 window.archiveCurrentPost = archiveCurrentPost;
 window.trashCurrentPost = trashCurrentPost;
@@ -1269,3 +1573,653 @@ window.closeBackgroundDialog = closeBackgroundDialog;
 window.applyPostBackground = applyPostBackground;
 window.applyCustomSolidColor = applyCustomSolidColor;
 window.removePostBackground = removePostBackground;
+
+// Nuevas funciones para selector de color del texto y resaltado
+window.openColorPicker = openColorPicker;
+window.closeColorPicker = closeColorPicker;
+window.applyTextFormatColor = applyTextFormatColor;
+
+window.openInternalLinkSelector = openInternalLinkSelector;
+window.closeInternalLinkSelector = closeInternalLinkSelector;
+window.filterInternalLinks = filterInternalLinks;
+window.insertInternalLink = insertInternalLink;
+
+window.updateEditorCoverUI = updateEditorCoverUI;
+window.toggleMoreMenu = toggleMoreMenu;
+window.closeMoreMenu = closeMoreMenu;
+window.changeCoverPhotoPrompt = changeCoverPhotoPrompt;
+window.deleteCoverPhoto = deleteCoverPhoto;
+
+// Creador y Editor Contextual de Tablas
+export function openTableGridSelector(btn) {
+    const selector = document.getElementById('table-grid-selector');
+    const backdrop = document.getElementById('table-grid-selector-backdrop');
+    const gridSquares = document.getElementById('table-grid-squares');
+    const sizeText = document.getElementById('table-grid-size-text');
+    if (!selector || !backdrop || !gridSquares || !sizeText) return;
+
+    // Guardar selección activa
+    const selection = window.getSelection();
+    lastTableSelectionRange = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+    // Generar cuadrícula de 10x10
+    gridSquares.innerHTML = '';
+    sizeText.textContent = '1x1';
+
+    for (let r = 1; r <= 10; r++) {
+        for (let c = 1; c <= 10; c++) {
+            const square = document.createElement('div');
+            square.className = 'w-3.5 h-3.5 border border-slate-200 dark:border-slate-700 rounded-sm cursor-pointer transition-colors';
+            square.dataset.row = r;
+            square.dataset.col = c;
+
+            // Hover: iluminar cuadrícula hasta el tamaño RxC
+            square.onmouseover = () => {
+                sizeText.textContent = `${c} x ${r}`;
+                const squares = gridSquares.querySelectorAll('div');
+                squares.forEach(sq => {
+                    const sqRow = parseInt(sq.dataset.row);
+                    const sqCol = parseInt(sq.dataset.col);
+                    if (sqRow <= r && sqCol <= c) {
+                        sq.classList.add('bg-google-blue/30', 'dark:bg-google-blueDark/30', 'border-google-blue');
+                        sq.classList.remove('border-slate-200', 'dark:border-slate-700');
+                    } else {
+                        sq.classList.remove('bg-google-blue/30', 'dark:bg-google-blueDark/30', 'border-google-blue');
+                        sq.classList.add('border-slate-200', 'dark:border-slate-700');
+                    }
+                });
+            };
+
+            // Click: insertar tabla
+            square.onclick = (e) => {
+                e.preventDefault();
+                insertTableWithSize(r, c);
+            };
+
+            gridSquares.appendChild(square);
+        }
+    }
+
+    // Mostrar popover
+    backdrop.classList.remove('hidden');
+    selector.classList.remove('hidden');
+
+    // Posicionar selector
+    const rect = btn.getBoundingClientRect();
+    const selectorHeight = selector.offsetHeight || 220;
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    if (spaceBelow < selectorHeight + 20) {
+        selector.style.top = `${rect.top + window.scrollY - selectorHeight - 8}px`;
+    } else {
+        selector.style.top = `${rect.bottom + window.scrollY + 8}px`;
+    }
+
+    const maxLeft = window.innerWidth - selector.offsetWidth - 16;
+    selector.style.left = `${Math.max(16, Math.min(rect.left + window.scrollX, maxLeft))}px`;
+}
+
+export function closeTableGridSelector() {
+    const selector = document.getElementById('table-grid-selector');
+    const backdrop = document.getElementById('table-grid-selector-backdrop');
+    if (selector) selector.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+}
+
+export function updateTableContextToolbar() {
+    const toolbar = document.getElementById('table-context-toolbar');
+    if (!toolbar) return;
+
+    const selection = window.getSelection();
+    if (!selection.rangeCount) {
+        toolbar.classList.add('hidden');
+        activeTableCell = null;
+        return;
+    }
+
+    let node = selection.getRangeAt(0).startContainer;
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+
+    activeTableCell = node.closest('td, th');
+    
+    // Asegurarse de que esté dentro de la zona editable del documento
+    const docContent = document.getElementById('doc-content');
+    if (activeTableCell && docContent && docContent.contains(activeTableCell)) {
+        toolbar.classList.remove('hidden');
+        
+        // Calcular posición sobre la celda activa
+        const rect = activeTableCell.getBoundingClientRect();
+        const toolbarHeight = toolbar.offsetHeight || 38;
+        const toolbarWidth = toolbar.offsetWidth || 350;
+        
+        const top = rect.top + window.scrollY - toolbarHeight - 8;
+        const left = rect.left + window.scrollX + (rect.width / 2) - (toolbarWidth / 2);
+        
+        toolbar.style.top = `${top}px`;
+        toolbar.style.left = `${Math.max(16, left)}px`;
+    } else {
+        toolbar.classList.add('hidden');
+        activeTableCell = null;
+    }
+}
+
+export function handleTableAction(action) {
+    if (!activeTableCell) return;
+
+    const table = activeTableCell.closest('table');
+    const tr = activeTableCell.closest('tr');
+    if (!table || !tr) return;
+
+    const rowIndex = tr.rowIndex;
+    const cellIndex = activeTableCell.cellIndex;
+
+    switch (action) {
+        case 'addRowAbove':
+        case 'addRowBelow': {
+            const isAbove = action === 'addRowAbove';
+            const numCols = tr.cells.length;
+            const newRow = document.createElement('tr');
+            for (let i = 0; i < numCols; i++) {
+                const newCell = document.createElement('td');
+                newCell.className = 'border border-slate-200 dark:border-slate-800 px-3 py-2';
+                newCell.innerHTML = '<br>';
+                newRow.appendChild(newCell);
+            }
+            if (isAbove) {
+                tr.parentNode.insertBefore(newRow, tr);
+            } else {
+                tr.parentNode.insertBefore(newRow, tr.nextSibling);
+            }
+            break;
+        }
+
+        case 'deleteRow': {
+            if (table.rows.length <= 1) {
+                table.remove();
+            } else {
+                tr.remove();
+            }
+            break;
+        }
+
+        case 'addColumnLeft':
+        case 'addColumnRight': {
+            const isRight = action === 'addColumnRight';
+            const rows = table.rows;
+            for (let i = 0; i < rows.length; i++) {
+                const currentRow = rows[i];
+                const isHeader = currentRow.parentNode.tagName === 'THEAD' || currentRow.cells[0].tagName === 'TH';
+                const newCell = document.createElement(isHeader ? 'th' : 'td');
+                newCell.className = isHeader
+                    ? 'border border-slate-200 dark:border-slate-800 px-3 py-2 font-semibold text-left'
+                    : 'border border-slate-200 dark:border-slate-800 px-3 py-2';
+                newCell.innerHTML = '<br>';
+                
+                const targetIndex = isRight ? cellIndex + 1 : cellIndex;
+                if (targetIndex >= currentRow.cells.length) {
+                    currentRow.appendChild(newCell);
+                } else {
+                    currentRow.insertBefore(newCell, currentRow.cells[targetIndex]);
+                }
+            }
+            break;
+        }
+
+        case 'deleteColumn': {
+            const numCols = tr.cells.length;
+            if (numCols <= 1) {
+                table.remove();
+            } else {
+                const rows = table.rows;
+                for (let i = 0; i < rows.length; i++) {
+                    if (rows[i].cells[cellIndex]) {
+                        rows[i].cells[cellIndex].remove();
+                    }
+                }
+            }
+            break;
+        }
+
+        case 'alignLeft':
+        case 'alignCenter':
+        case 'alignRight': {
+            const alignment = action === 'alignLeft' ? 'left' : (action === 'alignCenter' ? 'center' : 'right');
+            const rows = table.rows;
+            for (let i = 0; i < rows.length; i++) {
+                if (rows[i].cells[cellIndex]) {
+                    rows[i].cells[cellIndex].style.textAlign = alignment;
+                }
+            }
+            break;
+        }
+
+        case 'deleteTable': {
+            table.remove();
+            break;
+        }
+    }
+
+    // Ocultar barra flotante
+    const toolbar = document.getElementById('table-context-toolbar');
+    if (toolbar) toolbar.classList.add('hidden');
+    activeTableCell = null;
+
+    triggerEditorInput();
+}
+
+window.openTableGridSelector = openTableGridSelector;
+window.closeTableGridSelector = closeTableGridSelector;
+window.updateTableContextToolbar = updateTableContextToolbar;
+window.handleTableAction = handleTableAction;
+
+export function openColorPicker(command, btn) {
+    const selector = document.getElementById('text-format-color-picker');
+    const backdrop = document.getElementById('text-format-color-picker-backdrop');
+    if (!selector || !backdrop) return;
+
+    currentColorCommand = command;
+    
+    // Guardar selección activa
+    const selection = window.getSelection();
+    lastColorSelectionRange = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+    // Actualizar título
+    const titleEl = document.getElementById('color-picker-title');
+    if (titleEl) {
+        titleEl.textContent = command === 'foreColor' ? 'Color de Texto' : 'Resaltado';
+    }
+
+    // Obtener valor activo si existe para destacar el botón correspondiente
+    let activeValue = '';
+    if (selection.rangeCount > 0) {
+        let node = selection.getRangeAt(0).startContainer;
+        if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+        
+        let current = node;
+        const docContent = document.getElementById('doc-content');
+        while (current && current !== docContent) {
+            if (command === 'foreColor') {
+                if (current.style && current.style.color) {
+                    activeValue = current.style.color;
+                    break;
+                }
+                if (current.tagName === 'FONT' && current.hasAttribute('color')) {
+                    activeValue = current.getAttribute('color');
+                    break;
+                }
+            } else if (command === 'backColor') {
+                if (current.style && current.style.backgroundColor) {
+                    activeValue = current.style.backgroundColor;
+                    break;
+                }
+            }
+            current = current.parentNode;
+        }
+    }
+
+    // Poblar la paleta de colores curados
+    const grid = document.getElementById('color-picker-grid');
+    if (grid) {
+        grid.innerHTML = '';
+        FORMAT_COLORS.forEach(color => {
+            const swatch = document.createElement('button');
+            swatch.className = 'w-7 h-7 rounded-full border border-slate-200 dark:border-slate-700 transition-transform hover:scale-110 active:scale-95 cursor-pointer relative';
+            swatch.style.backgroundColor = color.hex;
+            swatch.title = color.name;
+            
+            // Si el color actual coincide con el de la paleta, marcarlo con un dot contrastante
+            if (activeValue && colorsMatch(activeValue, color.hex)) {
+                const dot = document.createElement('span');
+                const isVeryLight = color.hex.toLowerCase() === '#ffffff' || 
+                                    color.hex.toLowerCase() === '#fef9c3' || 
+                                    color.hex.toLowerCase() === '#dcfce7' || 
+                                    color.hex.toLowerCase() === '#dbeafe' || 
+                                    color.hex.toLowerCase() === '#fee2e2' || 
+                                    color.hex.toLowerCase() === '#d1d5db';
+                const borderColor = isVeryLight ? 'border-slate-800' : 'border-white';
+                dot.className = `absolute inset-1.5 rounded-full border-2 ${borderColor} bg-transparent`;
+                swatch.appendChild(dot);
+            }
+            
+            swatch.onclick = (e) => {
+                e.preventDefault();
+                applyTextFormatColor(color.hex);
+            };
+            grid.appendChild(swatch);
+        });
+    }
+
+    // Configurar botón de restablecer
+    const resetBtn = document.getElementById('color-picker-reset-btn');
+    if (resetBtn) {
+        resetBtn.onclick = (e) => {
+            e.preventDefault();
+            // Para resetear: foreColor a inherit, backColor a transparent/rgba(0,0,0,0)
+            const resetVal = command === 'foreColor' ? 'inherit' : 'transparent';
+            applyTextFormatColor(resetVal);
+        };
+    }
+
+    // Mostrar temporalmente para medir
+    backdrop.classList.remove('hidden');
+    selector.classList.remove('hidden');
+
+    // Calcular posición flotante del selector
+    const rect = btn.getBoundingClientRect();
+    const selectorHeight = selector.offsetHeight || 180;
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    if (spaceBelow < selectorHeight + 20) {
+        selector.style.top = `${rect.top + window.scrollY - selectorHeight - 8}px`;
+    } else {
+        selector.style.top = `${rect.bottom + window.scrollY + 8}px`;
+    }
+
+    const maxLeft = window.innerWidth - selector.offsetWidth - 16;
+    selector.style.left = `${Math.max(16, Math.min(rect.left + window.scrollX, maxLeft))}px`;
+}
+
+export function closeColorPicker() {
+    const selector = document.getElementById('text-format-color-picker');
+    const backdrop = document.getElementById('text-format-color-picker-backdrop');
+    if (selector) selector.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+}
+
+export function applyTextFormatColor(color) {
+    if (lastColorSelectionRange) {
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(lastColorSelectionRange);
+    }
+    
+    const docContent = document.getElementById('doc-content');
+    if (docContent) {
+        docContent.focus();
+    }
+
+    if (currentColorCommand) {
+        document.execCommand(currentColorCommand, false, color);
+        triggerEditorInput();
+    }
+    
+    closeColorPicker();
+}
+
+window.openColorPicker = openColorPicker;
+window.closeColorPicker = closeColorPicker;
+window.applyTextFormatColor = applyTextFormatColor;
+
+// Nuevas funciones para selector de enlaces internos
+export function openInternalLinkSelector(btn) {
+    const selector = document.getElementById('internal-link-selector');
+    const backdrop = document.getElementById('internal-link-selector-backdrop');
+    if (!selector || !backdrop) return;
+
+    // Guardar selección activa
+    const selection = window.getSelection();
+    lastInternalLinkSelectionRange = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+    // Limpiar buscador
+    const searchInput = document.getElementById('internal-link-search');
+    if (searchInput) searchInput.value = '';
+
+    // Renderizar lista inicial de posts
+    renderInternalLinkList();
+
+    // Mostrar
+    backdrop.classList.remove('hidden');
+    selector.classList.remove('hidden');
+
+    // Calcular posición flotante del selector
+    const rect = btn.getBoundingClientRect();
+    const selectorHeight = selector.offsetHeight || 240;
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    if (spaceBelow < selectorHeight + 20) {
+        selector.style.top = `${rect.top + window.scrollY - selectorHeight - 8}px`;
+    } else {
+        selector.style.top = `${rect.bottom + window.scrollY + 8}px`;
+    }
+
+    const maxLeft = window.innerWidth - selector.offsetWidth - 16;
+    selector.style.left = `${Math.max(16, Math.min(rect.left + window.scrollX, maxLeft))}px`;
+}
+
+export function closeInternalLinkSelector() {
+    const selector = document.getElementById('internal-link-selector');
+    const backdrop = document.getElementById('internal-link-selector-backdrop');
+    if (selector) selector.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+}
+
+export function renderInternalLinkList(filterQuery = '') {
+    const listContainer = document.getElementById('internal-link-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '';
+    const query = filterQuery.trim().toLowerCase();
+
+    // Obtener posts excluyendo el actual y los que estén en la papelera
+    const availablePosts = posts.filter(p => p.id !== currentPostId && !p.trashed);
+    
+    // Filtrar por término
+    const filtered = query 
+        ? availablePosts.filter(p => p.title.toLowerCase().includes(query))
+        : availablePosts;
+
+    if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-center py-4 text-slate-400 dark:text-slate-500';
+        empty.textContent = query ? 'Sin coincidencias' : 'No hay otras entradas';
+        listContainer.appendChild(empty);
+        return;
+    }
+
+    filtered.forEach(p => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors truncate text-slate-700 dark:text-slate-200 font-medium block';
+        item.textContent = p.title.trim() || 'Sin Título';
+        item.title = p.title;
+        
+        item.onclick = (e) => {
+            e.preventDefault();
+            insertInternalLink(p.id, p.title.trim() || 'Sin Título');
+        };
+        listContainer.appendChild(item);
+    });
+}
+
+export function filterInternalLinks() {
+    const searchInput = document.getElementById('internal-link-search');
+    if (searchInput) {
+        renderInternalLinkList(searchInput.value);
+    }
+}
+
+export function insertInternalLink(targetPostId, targetPostTitle) {
+    if (lastInternalLinkSelectionRange) {
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(lastInternalLinkSelectionRange);
+    }
+
+    const selection = window.getSelection();
+    let selectedText = '';
+    if (selection.rangeCount > 0) {
+        selectedText = selection.toString();
+    }
+
+    const a = document.createElement('a');
+    a.href = `#post-${targetPostId}`;
+    a.setAttribute('data-post-id', targetPostId);
+    a.className = 'editor-link editor-internal-link hover:underline text-google-blue dark:text-google-blueDark font-medium';
+    a.textContent = selectedText || targetPostTitle;
+
+    // Enfocar editor
+    const docContent = document.getElementById('doc-content');
+    if (docContent) {
+        docContent.focus();
+    }
+
+    if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(a);
+        
+        range.setStartAfter(a);
+        range.setEndAfter(a);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    } else {
+        if (docContent) {
+            const range = document.createRange();
+            range.selectNodeContents(docContent);
+            range.collapse(false);
+            range.insertNode(a);
+            range.setStartAfter(a);
+            range.setEndAfter(a);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+    }
+
+    triggerEditorInput();
+    closeInternalLinkSelector();
+}
+
+window.openInternalLinkSelector = openInternalLinkSelector;
+window.closeInternalLinkSelector = closeInternalLinkSelector;
+window.filterInternalLinks = filterInternalLinks;
+window.insertInternalLink = insertInternalLink;
+
+export function updateEditorCoverUI(post) {
+    const coverContainer = document.getElementById('doc-cover-container');
+    const coverImg = document.getElementById('doc-cover-img');
+    if (!coverContainer || !coverImg) return;
+
+    if (post && post.cover) {
+        coverImg.src = post.cover;
+        coverImg.onerror = () => {
+            coverContainer.classList.add('hidden');
+        };
+        coverContainer.classList.remove('hidden');
+    } else {
+        coverImg.src = '';
+        coverContainer.classList.add('hidden');
+    }
+}
+
+export function toggleMoreMenu(btn) {
+    const menu = document.getElementById('more-menu-dropdown');
+    const backdrop = document.getElementById('more-menu-backdrop');
+    if (!menu || !backdrop) return;
+
+    if (!menu.classList.contains('hidden')) {
+        closeMoreMenu();
+        return;
+    }
+
+    const post = posts.find(p => p.id === currentPostId);
+    menu.innerHTML = '';
+    
+    const changeOption = document.createElement('button');
+    changeOption.className = 'w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-sm text-slate-700 dark:text-slate-200 flex items-center gap-2.5 font-medium';
+    changeOption.innerHTML = `
+        <span class="material-symbols-outlined text-lg text-slate-500 dark:text-slate-400">image</span>
+        ${post && post.cover ? 'Cambiar foto de portada' : 'Añadir foto de portada'}
+    `;
+    changeOption.onclick = (e) => {
+        e.preventDefault();
+        closeMoreMenu();
+        changeCoverPhotoPrompt();
+    };
+    menu.appendChild(changeOption);
+
+    if (post && post.cover) {
+        const deleteOption = document.createElement('button');
+        deleteOption.className = 'w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-sm text-red-600 dark:text-red-400 flex items-center gap-2.5 font-medium border-t border-slate-100 dark:border-slate-800';
+        deleteOption.innerHTML = `
+            <span class="material-symbols-outlined text-lg">delete</span>
+            Eliminar foto de portada
+        `;
+        deleteOption.onclick = (e) => {
+            e.preventDefault();
+            closeMoreMenu();
+            deleteCoverPhoto();
+        };
+        menu.appendChild(deleteOption);
+    }
+
+    backdrop.classList.remove('hidden');
+    menu.classList.remove('hidden');
+
+    const rect = btn.getBoundingClientRect();
+    const menuHeight = menu.offsetHeight || 80;
+    const spaceBelow = window.innerHeight - rect.bottom;
+
+    if (spaceBelow < menuHeight + 20) {
+        menu.style.top = `${rect.top + window.scrollY - menuHeight - 8}px`;
+    } else {
+        menu.style.top = `${rect.bottom + window.scrollY + 8}px`;
+    }
+
+    const maxLeft = window.innerWidth - menu.offsetWidth - 16;
+    menu.style.left = `${Math.max(16, Math.min(rect.left + window.scrollX - menu.offsetWidth + btn.offsetWidth, maxLeft))}px`;
+}
+
+export function closeMoreMenu() {
+    const menu = document.getElementById('more-menu-dropdown');
+    const backdrop = document.getElementById('more-menu-backdrop');
+    if (menu) menu.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+}
+
+export function changeCoverPhotoPrompt() {
+    if (!currentPostId) return;
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || post.trashed) return;
+
+    const url = prompt('Introduce la URL de la imagen de portada:', post.cover || '');
+    if (url === null) return;
+
+    const trimmedUrl = url.trim();
+    if (trimmedUrl === '') {
+        deleteCoverPhoto();
+        return;
+    }
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+        showToast('Por favor, introduce una URL válida (http://... o https://...)');
+        return;
+    }
+
+    post.cover = trimmedUrl;
+    post.updatedAt = new Date().toISOString();
+    savePostsToStorage();
+    updateEditorCoverUI(post);
+    renderFileTree();
+    showToast('Foto de portada actualizada');
+}
+
+export function deleteCoverPhoto() {
+    if (!currentPostId) return;
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || post.trashed) return;
+
+    if (post.cover) {
+        delete post.cover;
+        post.updatedAt = new Date().toISOString();
+        savePostsToStorage();
+        updateEditorCoverUI(post);
+        renderFileTree();
+        showToast('Foto de portada eliminada');
+    }
+}
+
+window.updateEditorCoverUI = updateEditorCoverUI;
+window.toggleMoreMenu = toggleMoreMenu;
+window.closeMoreMenu = closeMoreMenu;
+window.changeCoverPhotoPrompt = changeCoverPhotoPrompt;
+window.deleteCoverPhoto = deleteCoverPhoto;

@@ -50,8 +50,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 6. Inicializar redimensionamiento del sidebar
         initSidebarResize();
 
+        // 7. Inicializar efecto marquee sobre elementos truncados
+        initTextMarqueeHover();
+
         console.log('[BlogApp] Inicializada con éxito.');
     } catch (error) {
         console.error('[BlogApp] Error crítico durante la inicialización:', error);
     }
 });
+
+/**
+ * Inicializa el desplazamiento automático de textos truncados al pasar el cursor (efecto marquee).
+ */
+function initTextMarqueeHover() {
+    document.addEventListener('mouseenter', (e) => {
+        const el = e.target.closest('.truncate');
+        if (!el) return;
+
+        // Comprobar si el texto desborda el ancho visible
+        if (el.scrollWidth > el.clientWidth) {
+            // Buffer de 10 píxeles para que no quede pegado al final
+            const scrollDistance = el.scrollWidth - el.clientWidth + 10;
+            el.style.setProperty('--scroll-dist', `-${scrollDistance}px`);
+            
+            // Velocidad de 35px por segundo para lectura cómoda
+            const duration = Math.max(1.5, scrollDistance / 35);
+            el.style.setProperty('--scroll-duration', `${duration}s`);
+            el.classList.add('scrolling-active');
+        }
+    }, true);
+
+    document.addEventListener('mouseleave', (e) => {
+        const el = e.target.closest('.truncate');
+        if (!el) return;
+        el.classList.remove('scrolling-active');
+    }, true);
+}

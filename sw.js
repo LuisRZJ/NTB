@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ntb-cache-v2';
+const CACHE_NAME = 'ntb-cache-v3';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',

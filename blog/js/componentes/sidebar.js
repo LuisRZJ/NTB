@@ -370,6 +370,15 @@ export function toggleLabelCollapse(labelId) {
 window.toggleLabelCollapse = toggleLabelCollapse;
 
 /**
+ * Colapsa todas las etiquetas y subetiquetas.
+ */
+export function collapseAllLabels() {
+    expandedLabels.clear();
+    renderSidebarLabels();
+}
+window.collapseAllLabels = collapseAllLabels;
+
+/**
  * Renderiza los botones de etiquetas en el sidebar.
  */
 export function renderSidebarLabels() {
@@ -564,4 +573,5 @@ window.setSidebarMode = setSidebarMode;
 window.renderSidebarLabels = renderSidebarLabels;
 window.updateSectionCounts = updateSectionCounts;
 window.toggleLabelCollapse = toggleLabelCollapse;
+window.collapseAllLabels = collapseAllLabels;
 window.initSidebarResize = initSidebarResize;

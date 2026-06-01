@@ -710,3 +710,14 @@ button[onclick*="toggleLabelCollapse"] {
         display: none !important;
     }
 }
+
+/* Efecto marquee (desplazamiento) en hover para textos truncados */
+.truncate {
+    transition: text-indent var(--scroll-duration, 1.5s) ease-in-out;
+    text-indent: 0;
+}
+
+.truncate.scrolling-active:hover {
+    text-indent: var(--scroll-dist, 0px) !important;
+    text-overflow: clip !important;
+}

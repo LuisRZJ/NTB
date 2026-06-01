@@ -86,7 +86,7 @@
 <body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 h-screen max-h-screen transition-colors duration-300 overflow-hidden flex flex-col md:flex-row">
 
     <!-- ==================== SIDEBAR (Desktop) ==================== -->
-    <aside id="sidebar" class="flex flex-col w-64 xl:w-72 h-screen px-4 py-6 flex-shrink-0 bg-google-grayBg dark:bg-[#111318] justify-between border-r border-slate-200/50 dark:border-slate-800/50 sidebar-expanded">
+    <aside id="sidebar" class="flex flex-col w-72 xl:w-80 h-screen px-4 py-6 flex-shrink-0 bg-google-grayBg dark:bg-[#111318] justify-between border-r border-slate-200/50 dark:border-slate-800/50 sidebar-expanded">
         <div id="sidebar-inner" class="flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar">
             <!-- Brand / Logo -->
             <div class="flex items-center justify-between px-3">
@@ -152,9 +152,14 @@
             <div>
                 <div class="flex items-center justify-between px-4 mb-1">
                     <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Etiquetas</span>
-                    <button onclick="openLabelDialog()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors" title="Crear etiqueta">
-                        <span class="material-symbols-outlined text-sm">add</span>
-                    </button>
+                    <div class="flex items-center gap-1">
+                        <button onclick="collapseAllLabels()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors" title="Colapsar todas">
+                            <span class="material-symbols-outlined text-sm">unfold_less</span>
+                        </button>
+                        <button onclick="openLabelDialog()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors" title="Crear etiqueta">
+                            <span class="material-symbols-outlined text-sm">add</span>
+                        </button>
+                    </div>
                 </div>
                 <div id="sidebar-labels-container" class="mt-1 space-y-0.5 max-h-48 overflow-y-auto no-scrollbar pr-1">
                     <!-- Dynamic label buttons -->

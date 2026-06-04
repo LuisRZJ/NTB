@@ -139,6 +139,7 @@ function loadPostsFromStorage() {
                     // Asegurar integridad de cada post
                     results.forEach(post => {
                         if (!post.history) post.history = [];
+                        if (!post.databases) post.databases = {};
                         if (!Array.isArray(post.labels)) post.labels = [];
                         if (!post.createdAt) post.createdAt = new Date().toISOString();
                         if (!post.updatedAt) post.updatedAt = post.createdAt;

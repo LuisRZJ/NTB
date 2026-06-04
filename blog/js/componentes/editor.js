@@ -14,6 +14,7 @@ import {
 import { savePostsToStorage } from './storage.js';
 import { renderFileTree, updateSectionCounts, renderSidebarLabels } from './sidebar.js';
 import { showToast } from './toast.js';
+import { initializeDatabases, cleanDatabasesBeforeSave, insertDatabase } from './database.js';
 
 let autoSaveTimeout = null;
 let lastSavedTitle = '';
@@ -129,6 +130,7 @@ export function loadPost(id) {
     if (docContent) {
         docContent.innerHTML = post.content || '';
         docContent.contentEditable = !post.trashed; // Deshabilitar edición si está en la papelera
+        initializeDatabases();
     }
 
     // Actualizar breadcrumbs
@@ -259,6 +261,7 @@ export function createNewPost() {
         background: 'default',
         title: '',
         content: '',
+        databases: {},
         pinned: false,
         archived: false,
         trashed: false,
@@ -326,9 +329,10 @@ function performAutoSave() {
 
     const newTitle = docTitle.value;
     const newContent = docContent.innerHTML;
+    const newContentCleaned = cleanDatabasesBeforeSave(newContent);
 
     // Verificar si hay cambios reales
-    if (newTitle === lastSavedTitle && newContent === lastSavedContent) {
+    if (newTitle === lastSavedTitle && newContentCleaned === lastSavedContent) {
         resetSaveStatus();
         return;
     }
@@ -337,7 +341,7 @@ function performAutoSave() {
     // Criterios: No hay historial, o ha pasado > 2 minutos, o la longitud del contenido cambió > 10%
     const now = Date.now();
     const prevContentLength = lastSavedContent.length;
-    const newContentLength = newContent.length;
+    const newContentLength = newContentCleaned.length;
     const lengthDiff = Math.abs(newContentLength - prevContentLength);
     const sizeChangedSignificantly = prevContentLength > 0 && (lengthDiff / prevContentLength) > 0.1;
     const timeElapsed = (now - lastSnapshotTime) > 120000; // 2 minutos
@@ -361,14 +365,14 @@ function performAutoSave() {
 
     // Actualizar post
     post.title = newTitle;
-    post.content = newContent;
+    post.content = newContentCleaned;
     post.updatedAt = new Date().toISOString();
 
     savePostsToStorage();
     
     // Actualizar los valores guardados localmente
     lastSavedTitle = newTitle;
-    lastSavedContent = newContent;
+    lastSavedContent = newContentCleaned;
 
     // Actualizar breadcrumb
     const breadcrumbTitle = document.getElementById('breadcrumb-title');
@@ -1550,6 +1554,7 @@ window.formatCodeBlock = formatCodeBlock;
 window.insertTaskList = insertTaskList;
 window.insertImage = insertImage;
 window.insertTable = openTableGridSelector;
+window.insertDatabase = insertDatabase;
 window.insertLink = insertLink;
 window.initToolbarStateObserver = initToolbarStateObserver;
 window.updateToolbarState = updateToolbarState;

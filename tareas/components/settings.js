@@ -167,44 +167,18 @@ document.getElementById('settings-mount').innerHTML = `
           </div>
         </section>
 
-        <!-- Sección: Sincronización en la nube (GitHub Sync) -->
+        <!-- Sección: Sincronización en la nube (Vercel Serverless) -->
         <section class="settings-section">
           <div class="settings-section-head">
             <span class="settings-section-icon">☁</span>
-            <h2 class="settings-section-title">Sincronización con GitHub (Cifrado Local)</h2>
+            <h2 class="settings-section-title">Sincronización en la Nube (Vercel Serverless)</h2>
           </div>
-          <p class="settings-section-desc">Guarda tus tareas de forma segura en un repositorio privado de GitHub. Las credenciales se almacenan cifradas localmente.</p>
+          <p class="settings-section-desc">Guarda tus tareas de forma segura en la nube. Las credenciales de GitHub se gestionan de forma segura en el servidor de Vercel. Solo necesitas tu contraseña de sincronización.</p>
 
           <div class="settings-field">
-            <label class="settings-label" for="github-repo-input">Repositorio (usuario/repo)</label>
-            <input class="settings-input" id="github-repo-input" type="text" placeholder="ej: LuisRZJ/planner-backups" autocomplete="off"/>
-          </div>
-
-          <div class="settings-field">
-            <label class="settings-label" for="github-token-input">Personal Access Token (PAT)</label>
+            <label class="settings-label" for="github-pass-input">Contraseña de Sincronización</label>
             <div class="relative" style="position: relative; width: 100%; box-sizing: border-box;">
-              <input class="settings-input" id="github-token-input" type="password" placeholder="ghp_..." autocomplete="off" style="width: 100%; padding-right: 36px; box-sizing: border-box;"/>
-              <button type="button" onclick="toggleFieldVisibility('github-token-input', this)" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0;">
-                <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="settings-field" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-            <div>
-              <label class="settings-label" for="github-branch-input">Rama / Branch</label>
-              <input class="settings-input" id="github-branch-input" type="text" value="main" autocomplete="off"/>
-            </div>
-            <div>
-              <label class="settings-label" for="github-path-input">Ruta del archivo</label>
-              <input class="settings-input" id="github-path-input" type="text" value="daily-planner-backup.json" autocomplete="off"/>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <label class="settings-label" for="github-pass-input">Contraseña Maestra de Cifrado</label>
-            <div class="relative" style="position: relative; width: 100%; box-sizing: border-box;">
-              <input class="settings-input" id="github-pass-input" type="password" placeholder="Clave para encriptar local" autocomplete="off" style="width: 100%; padding-right: 36px; box-sizing: border-box;"/>
+              <input class="settings-input" id="github-pass-input" type="password" placeholder="Ingresa tu contraseña de sincronización" autocomplete="off" style="width: 100%; padding-right: 36px; box-sizing: border-box;"/>
               <button type="button" onclick="toggleFieldVisibility('github-pass-input', this)" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0;">
                 <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
               </button>
@@ -214,14 +188,14 @@ document.getElementById('settings-mount').innerHTML = `
           <div class="cloud-status-row" style="margin-top: 6px; display: flex; align-items: center; justify-content: space-between;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span class="cloud-status-dot" id="github-status-dot"></span>
-              <span class="cloud-status" id="github-status">Sin configurar</span>
+              <span class="cloud-status" id="github-status">Sin conectar</span>
             </div>
-            <button class="settings-data-btn" id="github-save-settings" style="flex: unset; min-width: 140px; padding: 8px 12px;">Guardar y Conectar</button>
+            <button class="settings-data-btn" id="github-save-settings" style="flex: unset; min-width: 140px; padding: 8px 12px;">Conectar</button>
           </div>
 
           <div class="settings-data-actions" id="github-actions-container" style="display: none; margin-top: 10px; gap: 10px;">
-            <button class="settings-data-btn" id="github-push">☁ Respaldar en GitHub</button>
-            <button class="settings-data-btn" id="github-pull">↓ Restaurar desde GitHub</button>
+            <button class="settings-data-btn" id="github-push">☁ Respaldar en la Nube</button>
+            <button class="settings-data-btn" id="github-pull">↓ Restaurar desde la Nube</button>
           </div>
         </section>
 

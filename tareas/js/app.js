@@ -2687,29 +2687,42 @@ async function importData(file) {
   }
 }
 
-// ── Sincronización con GitHub (Cifrado Local Cliente) ──
-let githubSettings = null;
+// ── Sincronización en la Nube (Vercel Serverless) ──
+
+/**
+ * Llama a la API serverless para realizar operaciones de sincronización.
+ */
+async function callSyncAPI(action, password, data = null) {
+  const response = await fetch('/api/sync', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      password,
+      module: 'tareas',
+      action,
+      data
+    })
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || `Error HTTP ${response.status}`);
+  }
+
+  return await response.json();
+}
 
 async function initGithubSync() {
   try {
-    const settings = await dbGetMeta('github_settings');
-    if (!settings) {
-      updateGithubUIState('unconfigured');
-      return;
-    }
-    githubSettings = settings;
-
-    // Rellenar siempre los campos básicos para que estén visibles
-    fillGithubUIFields();
-
     // 1. Verificar si hay sesión en sessionStorage primero
-    const sessionToken = sessionStorage.getItem('github_token');
     const sessionPass = sessionStorage.getItem('github_sync_pass');
 
-    if (sessionToken && sessionPass) {
+    if (sessionPass) {
       updateGithubUIState('connected');
       fillGithubUIFields();
-      verifyCloudVersionSilently(sessionToken);
+      verifyCloudVersionSilently(sessionPass);
       return;
     }
 
@@ -2724,19 +2737,18 @@ async function initGithubSync() {
 
       if (!isExpired) {
         try {
-          // Intentar descifrar automáticamente
-          const token = await decryptText(githubSettings.encryptedToken, storedPass);
+          // Validar la contraseña contra la API
+          await callSyncAPI('auth', storedPass);
           
           // Guardar en sessionStorage para la sesión activa
-          sessionStorage.setItem('github_token', token);
           sessionStorage.setItem('github_sync_pass', storedPass);
 
           updateGithubUIState('connected');
           fillGithubUIFields();
-          verifyCloudVersionSilently(token);
+          verifyCloudVersionSilently(storedPass);
           return; // Autologin exitoso
-        } catch (decryptErr) {
-          console.warn('[GitHubSync] Error al descifrar automáticamente con clave de localStorage en Tareas:', decryptErr);
+        } catch (err) {
+          console.warn('[GitHubSync] Contraseña de autologin rechazada por el servidor:', err);
         }
       } else {
         // Ha expirado el plazo de 15 días
@@ -2750,7 +2762,7 @@ async function initGithubSync() {
 
         const subtitle = document.getElementById('github-decrypt-subtitle');
         if (subtitle) {
-          subtitle.innerHTML = '<strong>Tu confirmación periódica de 15 días ha expirado.</strong> Por favor, reintroduce tu contraseña maestra para continuar sincronizando.';
+          subtitle.innerHTML = '<strong>Tu confirmación periódica de 15 días ha expirado.</strong> Por favor, reintroduce tu contraseña de sincronización para continuar.';
         }
         return;
       }
@@ -2766,7 +2778,7 @@ async function initGithubSync() {
 
     const subtitle = document.getElementById('github-decrypt-subtitle');
     if (subtitle) {
-      subtitle.textContent = 'Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.';
+      subtitle.textContent = 'Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.';
     }
   } catch (e) {
     console.error('[GitHubSync] Error al inicializar:', e);
@@ -2774,41 +2786,28 @@ async function initGithubSync() {
 }
 
 function fillGithubUIFields() {
-  if (!githubSettings) return;
-  const repoInput = document.getElementById('github-repo-input');
-  const branchInput = document.getElementById('github-branch-input');
-  const pathInput = document.getElementById('github-path-input');
-  const tokenInput = document.getElementById('github-token-input');
   const passInput = document.getElementById('github-pass-input');
-
-  if (repoInput) repoInput.value = githubSettings.repo || '';
-  if (branchInput) branchInput.value = githubSettings.branch || 'main';
-  if (pathInput) pathInput.value = githubSettings.filepath || 'daily-planner-backup.json';
-
-  const sessionToken = sessionStorage.getItem('github_token');
   const sessionPass = sessionStorage.getItem('github_sync_pass');
-
-  if (tokenInput && sessionToken) tokenInput.value = sessionToken;
   if (passInput && sessionPass) passInput.value = sessionPass;
 }
 
 async function submitGithubDecrypt() {
   const input = document.getElementById('github-decrypt-pass-input');
   const errorMsg = document.getElementById('github-decrypt-error');
-  if (!input || !githubSettings) return;
+  if (!input) return;
 
   const password = input.value;
   if (!password) {
     if (errorMsg) {
-      errorMsg.textContent = 'Ingresa una contraseña';
+      errorMsg.textContent = 'Ingresa la contraseña';
       errorMsg.style.display = 'block';
     }
     return;
   }
 
   try {
-    const token = await decryptText(githubSettings.encryptedToken, password);
-    sessionStorage.setItem('github_token', token);
+    // Validar contraseña
+    await callSyncAPI('auth', password);
     sessionStorage.setItem('github_sync_pass', password);
 
     // Guardar de forma persistente en localStorage para el ciclo de 15 días
@@ -2824,17 +2823,17 @@ async function submitGithubDecrypt() {
     if (skipBtn) skipBtn.style.display = 'inline-block';
     const subtitle = document.getElementById('github-decrypt-subtitle');
     if (subtitle) {
-      subtitle.textContent = 'Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.';
+      subtitle.textContent = 'Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.';
     }
 
-    showToast('Credenciales descifradas correctamente');
+    showToast('Conectado a la nube exitosamente');
     updateGithubUIState('connected');
     fillGithubUIFields();
 
-    verifyCloudVersionSilently(token);
+    verifyCloudVersionSilently(password);
   } catch (e) {
     if (errorMsg) {
-      errorMsg.textContent = 'Contraseña incorrecta';
+      errorMsg.textContent = 'Contraseña incorrecta o error de conexión';
       errorMsg.style.display = 'block';
     }
   }
@@ -2848,88 +2847,40 @@ function skipGithubDecrypt() {
 }
 
 async function saveGithubSettings() {
-  const repoInput = document.getElementById('github-repo-input');
-  const tokenInput = document.getElementById('github-token-input');
-  const branchInput = document.getElementById('github-branch-input');
-  const pathInput = document.getElementById('github-path-input');
   const passInput = document.getElementById('github-pass-input');
-
-  const repoVal = repoInput ? repoInput.value.trim() : '';
-  const tokenVal = tokenInput ? tokenInput.value.trim() : '';
-  const branchVal = branchInput ? branchInput.value.trim() : 'main';
-  const pathVal = pathInput ? pathInput.value.trim() : 'daily-planner-backup.json';
   const passVal = passInput ? passInput.value : '';
 
-  if (!repoVal || !branchVal || !pathVal) {
-    showToast('Rellena los campos del repositorio, rama y ruta del archivo.');
-    return;
-  }
-
-  let tokenToEncrypt = tokenVal;
-  let passwordToUse = passVal;
-
-  if (!tokenVal && githubSettings) {
-    const sessionToken = sessionStorage.getItem('github_token');
-    if (sessionToken) {
-      tokenToEncrypt = sessionToken;
-    } else {
-      showToast('Ingresa tu Personal Access Token (PAT) de GitHub.');
-      return;
-    }
-  } else if (tokenVal && !passVal) {
-    showToast('Ingresa tu Contraseña Maestra de Cifrado para asegurar tus credenciales.');
-    return;
-  }
-
-  if (!passwordToUse) {
-    passwordToUse = sessionStorage.getItem('github_sync_pass') || localStorage.getItem('github_sync_pass') || '';
-  }
-
-  if (!passwordToUse) {
-    showToast('Proporciona una contraseña para cifrar tus datos.');
+  if (!passVal) {
+    showToast('Ingresa tu contraseña de sincronización.');
     return;
   }
 
   try {
-    showToast('Cifrando y verificando conexión...');
+    showToast('Verificando conexión con el servidor...');
 
-    // Probar conexión a GitHub antes de guardar
-    const meta = await getBackupMetadata(tokenToEncrypt, repoVal, pathVal, branchVal);
-    const encryptedToken = await encryptText(tokenToEncrypt, passwordToUse);
+    // Probar conexión y autenticación
+    await callSyncAPI('auth', passVal);
 
-    const settingsObj = {
-      repo: repoVal,
-      branch: branchVal,
-      filepath: pathVal,
-      encryptedToken: encryptedToken
-    };
-
-    await dbSetMeta('github_settings', settingsObj);
-    githubSettings = settingsObj;
-
-    sessionStorage.setItem('github_token', tokenToEncrypt);
-    sessionStorage.setItem('github_sync_pass', passwordToUse);
+    sessionStorage.setItem('github_sync_pass', passVal);
 
     // Guardar también en localStorage para los 15 días
-    localStorage.setItem('github_sync_pass', passwordToUse);
+    localStorage.setItem('github_sync_pass', passVal);
     localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
 
-    showToast('Configuración de GitHub guardada con éxito.');
+    showToast('Conexión establecida con éxito.');
     updateGithubUIState('connected');
     fillGithubUIFields();
 
-    if (meta.updatedAt) {
-      verifyCloudVersionSilently(tokenToEncrypt);
-    }
+    verifyCloudVersionSilently(passVal);
   } catch (err) {
-    showToast('Error de conexión o de credenciales: ' + err.message);
+    showToast('Error de conexión o contraseña incorrecta: ' + err.message);
   }
 }
 
 async function pushToGithub() {
-  const token = sessionStorage.getItem('github_token');
-  if (!token || !githubSettings) {
-    showToast('Inicia sesión en GitHub descifrando tus credenciales.');
+  const password = sessionStorage.getItem('github_sync_pass');
+  if (!password) {
+    showToast('Inicia sesión ingresando tu contraseña de sincronización.');
     return;
   }
 
@@ -2960,26 +2911,19 @@ async function pushToGithub() {
       }
     };
 
-    const newSha = await uploadBackupRemote(
-      token,
-      githubSettings.repo,
-      githubSettings.filepath,
-      githubSettings.branch,
-      backupData,
-      _backupSha
-    );
+    const res = await callSyncAPI('push', password, backupData);
 
-    _backupSha = newSha;
+    _backupSha = res.sha;
     _dataDirty = false;
     await dbSetMeta('lastBackupTime', backupData.exported);
-    await dbSetMeta('last_backup_sha', newSha);
+    await dbSetMeta('last_backup_sha', res.sha);
     
     const t = new Date();
     const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
     setCloudStatus('Backup: ' + timeStr, 'ok');
-    showToast('☁ Copia de seguridad subida a GitHub');
+    showToast('☁ Copia de seguridad subida a la nube');
   } catch (e) {
-    showToast('Error al respaldar en GitHub: ' + e.message);
+    showToast('Error al respaldar en la nube: ' + e.message);
     setCloudStatus('Error al subir', 'err');
   } finally {
     if (pushBtn) {
@@ -2990,34 +2934,25 @@ async function pushToGithub() {
 }
 
 function pullFromGithub() {
-  if (githubSettings) {
-    const token = sessionStorage.getItem('github_token');
-    if (!token) {
-      showToast('Descifra tus credenciales primero.');
-      return;
-    }
-    verifyCloudVersionSilently(token, true);
+  const password = sessionStorage.getItem('github_sync_pass');
+  if (!password) {
+    showToast('Descifra tus credenciales primero.');
+    return;
   }
+  verifyCloudVersionSilently(password, true);
 }
 
-async function verifyCloudVersionSilently(token, forcePrompt = false) {
-  if (!githubSettings) return;
-
+async function verifyCloudVersionSilently(password, forcePrompt = false) {
   try {
     if (forcePrompt) {
       setCloudStatus('Descargando...', '');
     }
 
-    const meta = await getBackupMetadata(
-      token,
-      githubSettings.repo,
-      githubSettings.filepath,
-      githubSettings.branch
-    );
+    const meta = await callSyncAPI('check', password);
 
-    if (!meta.content) {
+    if (!meta.exists || !meta.sha) {
       if (forcePrompt) {
-        showToast('No se encontró archivo de respaldo en GitHub.');
+        showToast('No se encontró archivo de respaldo en la nube.');
         setCloudStatus('Sin backup remoto', '');
       }
       return;
@@ -3039,12 +2974,7 @@ async function verifyCloudVersionSilently(token, forcePrompt = false) {
     const localTime = lastSynced ? new Date(lastSynced).getTime() : 0;
 
     if (forcePrompt || (cloudTime > localTime + 5000)) {
-      const backupData = await downloadBackup(
-        token,
-        githubSettings.repo,
-        githubSettings.filepath,
-        githubSettings.branch
-      );
+      const backupData = await callSyncAPI('pull', password);
       showSyncModal(backupData);
     } else {
       const t = new Date(cloudTime);
@@ -3108,13 +3038,13 @@ function setCloudStatus(msg, type) {
 function updateGithubUIState(state) {
   const actions = document.getElementById('github-actions-container');
   if (state === 'unconfigured') {
-    setCloudStatus('Sin configurar', '');
+    setCloudStatus('Sin conectar', '');
     if (actions) actions.style.display = 'none';
   } else if (state === 'locked') {
     setCloudStatus('Bloqueado (Requiere contraseña)', 'err');
     if (actions) actions.style.display = 'none';
   } else if (state === 'connected') {
-    setCloudStatus('Conectado a GitHub', 'ok');
+    setCloudStatus('Conectado a la Nube', 'ok');
     if (actions) actions.style.display = 'flex';
   } else if (state === 'local') {
     setCloudStatus('Desconectado (Modo local)', '');

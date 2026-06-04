@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ntb-cache-v10';
+const CACHE_NAME = 'ntb-cache-v11';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -47,6 +47,11 @@ self.addEventListener('activate', event => {
 
 // Intercepción Fetch: Estrategia Red Primero (Network First) con Fallback a Caché
 self.addEventListener('fetch', event => {
+  // Excluir peticiones a la API serverless (/api/)
+  if (event.request.url.includes('/api/')) {
+    return;
+  }
+
   // Filtrar peticiones no HTTP/HTTPS o externas (como chrome-extension:// o APIs remotas si no queremos cachearlas)
   if (!event.request.url.startsWith(self.location.origin)) {
     return;

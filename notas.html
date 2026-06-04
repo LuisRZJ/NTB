@@ -327,52 +327,27 @@
                 <!-- GitHub Sincronización -->
                 <div class="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800">
                     <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-                        <span class="material-symbols-outlined text-base">sync</span>Sincronización con GitHub (Cifrado Local)
+                        <span class="material-symbols-outlined text-base">sync</span>Sincronización en la Nube (Vercel Serverless)
                     </h3>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Guarda tus notas de forma segura en un repositorio privado de GitHub. Las credenciales se almacenan cifradas localmente.</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Guarda tus notas de forma segura en la nube. Las credenciales de GitHub se gestionan de forma segura en el servidor de Vercel. Solo necesitas tu contraseña de sincronización.</p>
                     
                     <div class="space-y-3">
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                                <label for="github-repo-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Repositorio (usuario/repo)</label>
-                                <input type="text" id="github-repo-input" placeholder="ej: LuisRZJ/ntb-backups" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
-                            </div>
-                            <div>
-                                <label for="github-token-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Personal Access Token (PAT)</label>
-                                <div class="relative">
-                                    <input type="password" id="github-token-input" placeholder="ghp_..." class="w-full pl-3 pr-10 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
-                                    <button type="button" onclick="toggleFieldVisibility('github-token-input', this)" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none flex items-center">
-                                        <span class="material-symbols-outlined text-lg">visibility</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div>
-                                <label for="github-branch-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Rama / Branch</label>
-                                <input type="text" id="github-branch-input" value="main" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
-                            </div>
-                            <div>
-                                <label for="github-path-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Ruta del archivo</label>
-                                <input type="text" id="github-path-input" value="notas-backup.json" class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
-                            </div>
-                            <div>
-                                <label for="github-pass-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Contraseña Maestra de Cifrado</label>
-                                <div class="relative">
-                                    <input type="password" id="github-pass-input" placeholder="Clave para encriptar local" class="w-full pl-3 pr-10 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
-                                    <button type="button" onclick="toggleFieldVisibility('github-pass-input', this)" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none flex items-center">
-                                        <span class="material-symbols-outlined text-lg">visibility</span>
-                                    </button>
-                                </div>
+                        <div class="max-w-md">
+                            <label for="github-pass-input" class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block mb-1">Contraseña de Sincronización</label>
+                            <div class="relative">
+                                <input type="password" id="github-pass-input" placeholder="Ingresa tu contraseña de sincronización" class="w-full pl-3 pr-10 py-2 text-sm bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                                <button type="button" onclick="toggleFieldVisibility('github-pass-input', this)" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none flex items-center">
+                                    <span class="material-symbols-outlined text-lg">visibility</span>
+                                </button>
                             </div>
                         </div>
                         
                         <div class="flex items-center justify-between pt-2">
                             <div id="github-status-badge" class="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
-                                <span class="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-700"></span> Sin configurar
+                                <span class="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-700"></span> Sin conectar
                             </div>
                             <button onclick="saveGithubSettings()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-xl hover:shadow-md transition-all">
-                                Guardar y Conectar
+                                Conectar
                             </button>
                         </div>
                     </div>
@@ -381,11 +356,11 @@
                     <div id="github-actions-container" class="hidden flex flex-col sm:flex-row gap-3 pt-3">
                         <button id="btn-github-push" onclick="pushToGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
                             <span class="material-symbols-outlined text-lg">cloud_upload</span>
-                            Respaldar en GitHub
+                            Respaldar en la Nube
                         </button>
                         <button id="btn-github-pull" onclick="pullFromGithub()" class="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-all border border-slate-200/50 dark:border-slate-700/50">
                             <span class="material-symbols-outlined text-lg">cloud_download</span>
-                            Restaurar desde GitHub
+                            Restaurar desde la Nube
                         </button>
                     </div>
                 </div>
@@ -1016,13 +991,13 @@
                     <span class="material-symbols-outlined text-google-blue dark:text-google-blueDark">lock_open</span>
                 </div>
                 <div>
-                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Sincronización con GitHub</h3>
-                    <p id="github-decrypt-subtitle" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.</p>
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Sincronización en la Nube</h3>
+                    <p id="github-decrypt-subtitle" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.</p>
                 </div>
             </div>
             <div class="p-5">
                 <div class="relative">
-                    <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña maestra de cifrado" onkeydown="if(event.key==='Enter') submitGithubDecrypt()" class="w-full pl-4 pr-10 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
+                    <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña de sincronización" onkeydown="if(event.key==='Enter') submitGithubDecrypt()" class="w-full pl-4 pr-10 py-2.5 text-sm bg-slate-100 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue text-slate-800 dark:text-slate-200">
                     <button type="button" onclick="toggleFieldVisibility('github-decrypt-pass-input', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none flex items-center">
                         <span class="material-symbols-outlined text-lg">visibility</span>
                     </button>
@@ -1031,7 +1006,7 @@
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0">
                 <button id="github-skip-decrypt-btn" onclick="skipGithubDecrypt()" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Trabajar en Local</button>
-                <button onclick="submitGithubDecrypt()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Iniciar Sincronización</button>
+                <button onclick="submitGithubDecrypt()" class="px-5 py-2 text-xs font-bold bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] rounded-full hover:shadow-md transition-all">Conectar Sincronización</button>
             </div>
         </div>
     </div>

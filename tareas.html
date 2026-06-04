@@ -106,10 +106,10 @@
 <div class="sync-modal-overlay" id="github-decrypt-backdrop" style="display:none" aria-modal="true" role="dialog">
   <div class="sync-modal">
     <div class="sync-modal-icon">🔑</div>
-    <h2 class="sync-modal-title">Sincronización con GitHub</h2>
-    <p class="sync-modal-msg" id="github-decrypt-subtitle">Ingresa tu contraseña maestra para descifrar tus credenciales y comprobar actualizaciones en la nube.</p>
+    <h2 class="sync-modal-title">Sincronización en la Nube</h2>
+    <p class="sync-modal-msg" id="github-decrypt-subtitle">Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.</p>
     <div class="relative" style="position: relative; width: 100%; box-sizing: border-box; margin-bottom: 8px;">
-      <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña maestra de cifrado" class="settings-input" style="width:100%; text-align:center; box-sizing: border-box; margin-bottom: 0; padding-right: 36px;"/>
+      <input type="password" id="github-decrypt-pass-input" placeholder="Contraseña de sincronización" class="settings-input" style="width:100%; text-align:center; box-sizing: border-box; margin-bottom: 0; padding-right: 36px;"/>
       <button type="button" onclick="toggleFieldVisibility('github-decrypt-pass-input', this)" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0;">
         <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
       </button>
@@ -117,7 +117,7 @@
     <div id="github-decrypt-error" class="settings-data-status err" style="display:none; margin-bottom: 8px;">Contraseña incorrecta</div>
     <div class="sync-modal-actions">
       <button class="sync-modal-btn sync-modal-btn-secondary" id="github-decrypt-skip">Trabajar en Local</button>
-      <button class="sync-modal-btn sync-modal-btn-primary" id="github-decrypt-submit">Iniciar Sincronización</button>
+      <button class="sync-modal-btn sync-modal-btn-primary" id="github-decrypt-submit">Conectar Sincronización</button>
     </div>
   </div>
 </div>

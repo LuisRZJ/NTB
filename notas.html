@@ -753,6 +753,12 @@
 
             <!-- Editor fields -->
             <div class="flex-1 overflow-y-auto p-6 space-y-4" id="dialog-body">
+                <!-- Selector de fecha (MD3 Pill Style) -->
+                <div class="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1.5 rounded-full w-fit border border-slate-200/50 dark:border-slate-700/50 mb-1">
+                    <span class="material-symbols-outlined text-sm">calendar_month</span>
+                    <label for="dialog-note-date" class="font-semibold">Fecha de la nota:</label>
+                    <input type="date" id="dialog-note-date" class="bg-transparent border-none outline-none text-slate-700 dark:text-slate-200 font-bold cursor-pointer focus:ring-0">
+                </div>
                 <input id="dialog-note-title" type="text" placeholder="Añade un título..." class="w-full text-xl font-bold bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 placeholder-slate-400">
                 <textarea id="dialog-note-content" placeholder="Escribe el contenido de tu nota aquí..." rows="8" class="w-full text-sm bg-transparent border-none outline-none resize-none text-slate-700 dark:text-slate-300 placeholder-slate-400"></textarea>
             </div>

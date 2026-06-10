@@ -24,6 +24,18 @@ export function openFullEditor() {
     updateDialogPinButton();
     updateDialogArchiveButton();
 
+    // Establecer fecha por defecto (hoy) y limitar fechas futuras
+    const dateInput = document.getElementById('dialog-note-date');
+    if (dateInput) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+        dateInput.value = todayStr;
+        dateInput.max = todayStr;
+    }
+
     toggleDialogUI(true);
 }
 
@@ -158,6 +170,22 @@ export function openFullEditorForEdit(noteId, event) {
             }
         }
         datesDiv.classList.remove('hidden');
+    }
+
+    // Inicializar selector de fecha con la fecha de creación de la nota y limitar fechas futuras
+    const dateInput = document.getElementById('dialog-note-date');
+    if (dateInput && note.createdAt) {
+        const noteDate = new Date(note.createdAt);
+        const yyyy = noteDate.getFullYear();
+        const mm = String(noteDate.getMonth() + 1).padStart(2, '0');
+        const dd = String(noteDate.getDate()).padStart(2, '0');
+        dateInput.value = `${yyyy}-${mm}-${dd}`;
+
+        const today = new Date();
+        const t_yyyy = today.getFullYear();
+        const t_mm = String(today.getMonth() + 1).padStart(2, '0');
+        const t_dd = String(today.getDate()).padStart(2, '0');
+        dateInput.max = `${t_yyyy}-${t_mm}-${t_dd}`;
     }
 
     const hasHistory = note.history && note.history.length > 0;
@@ -305,6 +333,7 @@ export function updateDialogArchiveButton() {
 export function saveDialogNote() {
     const titleInput = document.getElementById('dialog-note-title');
     const contentInput = document.getElementById('dialog-note-content');
+    const dateInput = document.getElementById('dialog-note-date');
 
     const title = titleInput ? titleInput.value.trim() : '';
     const content = contentInput ? contentInput.value.trim() : '';
@@ -316,15 +345,42 @@ export function saveDialogNote() {
         return;
     }
 
+    // Procesar la fecha seleccionada y validar que no sea futura
+    let noteCreatedAt = Date.now();
+    let dateStrChanged = false;
+    let selectedDateStr = '';
+
+    if (dateInput && dateInput.value) {
+        selectedDateStr = dateInput.value;
+        const selectedDate = new Date(selectedDateStr + 'T12:00:00'); // Mediodía para evitar problemas de zona horaria
+        noteCreatedAt = selectedDate.getTime();
+
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        if (noteCreatedAt > today.getTime()) {
+            showToast("No se pueden registrar notas con fechas futuras");
+            return;
+        }
+    }
+
     if (state.currentEditingId) {
         const note = state.notes.find(n => n.id === state.currentEditingId);
         if (note) {
             const titleChanged = note.title !== title;
             const contentChanged = note.content !== content;
+            
+            // Verificar si el día cambió
+            const noteDate = new Date(note.createdAt);
+            const yyyy = noteDate.getFullYear();
+            const mm = String(noteDate.getMonth() + 1).padStart(2, '0');
+            const dd = String(noteDate.getDate()).padStart(2, '0');
+            const noteDateStr = `${yyyy}-${mm}-${dd}`;
+            dateStrChanged = noteDateStr !== selectedDateStr;
+
             const prevTags = Array.isArray(note.tags) ? note.tags : [];
             const tagsChanged = JSON.stringify(prevTags.slice().sort()) !== JSON.stringify(tags.slice().sort());
 
-            if (titleChanged || contentChanged || note.color !== state.dialogColor || tagsChanged) {
+            if (titleChanged || contentChanged || note.color !== state.dialogColor || tagsChanged || dateStrChanged) {
                 addNoteToHistory(note, 'edit');
             }
 
@@ -334,9 +390,29 @@ export function saveDialogNote() {
             note.tags = tags;
             note.isPinned = state.dialogIsPinned;
             note.isArchived = state.dialogIsArchived;
+            
+            // Actualizar la fecha de creación conservando la hora original de la nota
+            if (dateStrChanged && selectedDateStr) {
+                const origDate = new Date(note.createdAt);
+                const [y, m, d] = selectedDateStr.split('-').map(Number);
+                origDate.setFullYear(y, m - 1, d);
+                note.createdAt = origDate.getTime();
+            }
+
             note.updatedAt = Date.now();
         }
     } else {
+        // Para nota nueva, combinamos la fecha seleccionada con la hora actual
+        let finalCreatedAt = noteCreatedAt;
+        if (selectedDateStr) {
+            const now = new Date();
+            const [y, m, d] = selectedDateStr.split('-').map(Number);
+            const buildDate = new Date();
+            buildDate.setFullYear(y, m - 1, d);
+            buildDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+            finalCreatedAt = buildDate.getTime();
+        }
+
         const newNote = {
             id: 'note-' + Date.now(),
             title: title,
@@ -346,7 +422,7 @@ export function saveDialogNote() {
             isPinned: state.dialogIsPinned,
             isArchived: state.dialogIsArchived,
             isTrash: false,
-            createdAt: Date.now(),
+            createdAt: finalCreatedAt,
             updatedAt: Date.now(),
             history: []
         };

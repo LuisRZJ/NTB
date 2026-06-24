@@ -99,7 +99,13 @@ function parseLists(html) {
                 result.push('<ul class="list-disc list-inside space-y-1 my-2">');
                 inUnorderedList = true;
             }
-            result.push(`<li>${unorderedMatch[1]}</li>`);
+            const taskMatch = unorderedMatch[1].match(/^\[([ xX])\]\s?(.*)/);
+            if (taskMatch) {
+                const checked = taskMatch[1] !== ' ' ? ' checked disabled' : ' disabled';
+                result.push(`<li class="flex items-start gap-2" style="list-style-type: none;"><input type="checkbox" class="rounded text-google-blue border-slate-300 pointer-events-none mt-1 shrink-0" ${checked}><span>${taskMatch[2]}</span></li>`);
+            } else {
+                result.push(`<li>${unorderedMatch[1]}</li>`);
+            }
         } else {
             if (inOrderedList) {
                 result.push('</ol>');

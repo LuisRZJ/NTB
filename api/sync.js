@@ -115,11 +115,24 @@ module.exports = async function handler(req, res) {
 
       const getJson = await getRes.json();
       const sha = getJson.sha;
+      let content;
 
-      // Decodificar Base64 de GitHub a JSON
-      const rawBase64 = getJson.content.replace(/\s/g, '');
-      const jsonString = Buffer.from(rawBase64, 'base64').toString('utf8');
-      const content = JSON.parse(jsonString);
+      if (getJson.content) {
+        // Decodificar Base64 de GitHub a JSON
+        const rawBase64 = getJson.content.replace(/\s/g, '');
+        const jsonString = Buffer.from(rawBase64, 'base64').toString('utf8');
+        content = JSON.parse(jsonString);
+      } else if (getJson.download_url) {
+        // Si el archivo es grande (>1MB), GitHub no devuelve el campo 'content' en los metadatos.
+        // Descargamos el contenido directamente usando su URL de descarga
+        const rawRes = await fetch(getJson.download_url, { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } });
+        if (!rawRes.ok) {
+          throw new Error(`Error al descargar archivo grande de GitHub (HTTP ${rawRes.status})`);
+        }
+        content = await rawRes.json();
+      } else {
+        throw new Error("El archivo de respaldo no contiene datos de contenido ni URL de descarga.");
+      }
 
       // Intentar obtener la fecha exacta del commit
       let updatedAt = null;

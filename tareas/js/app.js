@@ -449,13 +449,14 @@ async function addTask() {
     if (t) {
       t.text = text; t.desc = desc; t.cats = cats; t.cat = cats[0] || ''; t.pri = pri;
       t.due = due; t.dueTime = dueTime; t.repeat = repeat; t.project = project;
+      t.origDue = due;
       await dbPut(t);
       if (typeof addHistoryEntry === 'function') await addHistoryEntry('edited', t);
     }
     markDirty();
     showToast('✎ Tarea actualizada');
   } else {
-    const task = { id: now(), text, desc, cats, cat: cats[0] || '', pri, due, dueTime, repeat, project, parentId: subtaskParentId || null, done: false, time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}) };
+    const task = { id: now(), text, desc, cats, cat: cats[0] || '', pri, due, dueTime, repeat, project, parentId: subtaskParentId || null, done: false, origDue: due, time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}) };
     tasks.unshift(task);
     await dbPut(task);
     if (typeof addHistoryEntry === 'function') await addHistoryEntry('created', task);
@@ -487,7 +488,7 @@ async function toggleDone(id) {
     t.doneAt = todayISO();
     await dbPut(t);
     if (typeof addHistoryEntry === 'function') await addHistoryEntry('completed', t);
-    const next = addRepeat(t.due, t.dueTime || '', t.repeat);
+    const next = addRepeat(t.origDue || t.due, t.dueTime || '', t.repeat);
     const newTask = {
       id: now(),
       text: t.text,
@@ -497,6 +498,7 @@ async function toggleDone(id) {
       pri: t.pri,
       due: next.due,
       dueTime: next.dueTime,
+      origDue: next.due,
       repeat: t.repeat,
       project: t.project || '',
       parentId: t.parentId || null,
@@ -1768,6 +1770,7 @@ function renderDetailBody(id) {
       <button class="detail-action-btn" id="detail-add-subtask"><span class="btn-icon">＋</span> Añadir subtarea</button>
       <button class="detail-action-btn" id="detail-breakdown-ai"><span class="btn-icon" style="color:var(--gold);">✨</span> Desglosar con IA</button>
       <button class="detail-action-btn" id="detail-edit-task"><span class="btn-icon">✎</span> Editar</button>
+      ${t.due && !t.done ? `<button class="detail-action-btn" id="detail-postpone-tomorrow"><span class="btn-icon">🌅</span> Aplazar 1 día</button>` : ''}
       ${t.repeat ? `<button class="detail-action-btn" id="detail-snooze"><span class="btn-icon">⏰</span> Posponer</button>` : ''}
       <button class="detail-action-btn" id="detail-toggle-done"><span class="btn-icon">${t.done ? '↩' : '✓'}</span> ${t.done ? 'Reabrir' : 'Completar'}</button>
     </div>
@@ -1816,6 +1819,43 @@ function renderDetailBody(id) {
     if (detailStack.length) renderDetailBody(detailStack[detailStack.length - 1]);
   });
 
+  // Wire "Aplazar 1 día"
+  const postponeTomorrowBtn = document.getElementById('detail-postpone-tomorrow');
+  if (postponeTomorrowBtn) {
+    postponeTomorrowBtn.addEventListener('click', async () => {
+      const task = tasks.find(tt => tt.id === id);
+      if (!task || !task.due) return;
+
+      const oldDue = task.due;
+      const oldOrigDue = task.origDue || task.due;
+
+      const d = parseISODateLocal(task.due);
+      if (!d) return;
+      d.setDate(d.getDate() + 1);
+      const newDue = formatISODateLocal(d);
+
+      task.due = newDue;
+      task.origDue = oldOrigDue;
+
+      await dbPut(task);
+      markDirty();
+      render();
+      renderDetailBody(id);
+
+      showToast(`🌅 Aplazada para el ${formatDateNice(newDue)}`, {
+        undo: true,
+        onUndo: async () => {
+          task.due = oldDue;
+          task.origDue = oldOrigDue;
+          await dbPut(task);
+          markDirty();
+          render();
+          renderDetailBody(id);
+        }
+      });
+    });
+  }
+
   // Wire snooze for recurring tasks
   const snoozeBtn = document.getElementById('detail-snooze');
   if (snoozeBtn) {
@@ -1825,9 +1865,11 @@ function renderDetailBody(id) {
       if (!task.repeat) { showToast('No es una tarea recurrente'); return; }
       const oldDue = task.due || '';
       const oldDueTime = task.dueTime || '';
+      const oldOrigDue = task.origDue || '';
       const next = addRepeat(task.due || todayISO(), task.dueTime || '', task.repeat);
       task.due = next.due;
       task.dueTime = next.dueTime || '';
+      task.origDue = next.due;
       task.snoozedDates = task.snoozedDates || [];
       task.snoozedDates.push(todayISO());
       await dbPut(task);
@@ -1839,6 +1881,7 @@ function renderDetailBody(id) {
         onUndo: async () => {
           task.due = oldDue;
           task.dueTime = oldDueTime;
+          task.origDue = oldOrigDue;
           if (task.snoozedDates && task.snoozedDates.length > 0) {
             task.snoozedDates.pop();
           }

@@ -219,11 +219,16 @@ export function addColumn(dbId, name, type) {
 
     const db = post.databases[dbId];
     const colId = 'col-' + crypto.randomUUID().substring(0, 8);
+    
+    let width = 150;
+    if (type === 'checkbox') width = 75;
+    if (type === 'logo') width = 90;
+
     const newCol = {
         id: colId,
         name: name || 'Nueva columna',
         type: type || 'text',
-        width: 150,
+        width: width,
         options: type === 'select' || type === 'multiselect' || type === 'status' ? { choices: [] } : {}
     };
 
@@ -278,7 +283,8 @@ export function changeColumnType(dbId, columnId, newType) {
 
     const oldType = col.type;
     col.type = newType;
-    col.options = newType === 'select' || newType === 'multiselect' || newType === 'status' ? { choices: [] } : {};
+    if (!col.options) col.options = { choices: [] };
+    if (!col.options.choices) col.options.choices = [];
 
     // Convertir datos de celda
     db.rows.forEach(row => {
@@ -313,6 +319,9 @@ function convertCellValue(val, fromType, toType) {
     if (val === undefined || val === null) return null;
 
     if (toType === 'text') {
+        if (typeof val === 'object' && val !== null) {
+            return val.description ? `${val.text || ''} (${val.description})` : (val.text || '');
+        }
         if (Array.isArray(val)) return val.join(', ');
         return String(val);
     }
@@ -602,8 +611,42 @@ function computeCalculation(rows, column, fn) {
             const pct = rows.length > 0 ? Math.round((nonEmptyCount / rows.length) * 100) : 0;
             return `Lleno: ${pct}%`;
         }
-        default:
+        default: {
+            if (fn.startsWith('count_choice_')) {
+                const choiceId = fn.replace('count_choice_', '');
+                const choices = column.options?.choices || [];
+                const choice = choices.find(c => c.id === choiceId);
+                const choiceName = choice ? choice.name : 'Etiqueta';
+                
+                const count = values.filter(val => {
+                    if (type === 'multiselect') {
+                        return Array.isArray(val) && val.includes(choiceId);
+                    }
+                    return val === choiceId;
+                }).length;
+
+                return `${choiceName}: ${count}`;
+            }
+
+            if (fn.startsWith('percent_choice_')) {
+                const choiceId = fn.replace('percent_choice_', '');
+                const choices = column.options?.choices || [];
+                const choice = choices.find(c => c.id === choiceId);
+                const choiceName = choice ? choice.name : 'Etiqueta';
+
+                const count = values.filter(val => {
+                    if (type === 'multiselect') {
+                        return Array.isArray(val) && val.includes(choiceId);
+                    }
+                    return val === choiceId;
+                }).length;
+
+                const pct = rows.length > 0 ? Math.round((count / rows.length) * 100) : 0;
+                return `${choiceName}: ${pct}%`;
+            }
+
             return '';
+        }
     }
 }
 
@@ -616,6 +659,18 @@ export function renderDatabase(dbId, container) {
     if (!post || !post.databases || !post.databases[dbId]) return;
 
     const db = post.databases[dbId];
+
+    // Sanitización e inicialización defensiva de db.view
+    if (!db.view) {
+        db.view = { sorts: [], filters: [], hiddenColumns: [], calculations: {}, showCalculations: true };
+    } else {
+        if (!Array.isArray(db.view.sorts)) db.view.sorts = [];
+        if (!Array.isArray(db.view.filters)) db.view.filters = [];
+        if (!Array.isArray(db.view.hiddenColumns)) db.view.hiddenColumns = [];
+        if (!db.view.calculations || typeof db.view.calculations !== 'object') db.view.calculations = {};
+        if (db.view.showCalculations === undefined) db.view.showCalculations = true;
+    }
+
     container.innerHTML = '';
     
     // Contenedor principal con sombra y bordes redondeados
@@ -667,8 +722,9 @@ export function renderDatabase(dbId, container) {
     calcBtn.innerHTML = `<span class="material-symbols-outlined text-base">analytics</span>`;
     calcBtn.addEventListener('click', () => {
         db.view.showCalculations = !db.view.showCalculations;
-        refreshDatabase(dbId);
+        savePostsToStorage();
         triggerEditorInput();
+        refreshDatabase(dbId);
     });
     controls.appendChild(calcBtn);
 
@@ -708,16 +764,19 @@ export function renderDatabase(dbId, container) {
     const headerRow = document.createElement('tr');
     headerRow.className = 'bg-slate-50/70 dark:bg-slate-900/10 border-b border-slate-200 dark:border-slate-800/80';
 
-    db.columns.forEach(col => {
+    db.columns.forEach((col, colIdx) => {
         const th = document.createElement('th');
-        th.className = 'relative px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400 border-r border-slate-200/60 dark:border-slate-800/40 text-xs tracking-wider select-none hover:bg-slate-100/50 dark:hover:bg-slate-800/20 group';
+        th.className = 'relative px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400 border-r border-slate-200/60 dark:border-slate-800/40 text-xs tracking-wider select-none hover:bg-slate-100/50 dark:hover:bg-slate-800/20 group transition-all cursor-grab active:cursor-grabbing';
+        th.setAttribute('data-col-id', col.id);
+        th.setAttribute('data-col-index', colIdx);
+        th.setAttribute('draggable', 'true');
         
         const thContent = document.createElement('div');
-        thContent.className = 'flex items-center gap-1.5 cursor-pointer pr-3 truncate';
+        thContent.className = 'flex items-center gap-1.5 pr-3 truncate pointer-events-auto';
         
         // Icono según tipo de columna
         const colIcon = getColumnTypeIcon(col.type);
-        thContent.innerHTML = `<span class="material-symbols-outlined text-slate-400 text-sm">${colIcon}</span><span class="truncate font-semibold">${col.name}</span>`;
+        thContent.innerHTML = `<span class="material-symbols-outlined text-slate-400 text-sm flex-shrink-0">${colIcon}</span><span class="truncate font-semibold pointer-events-none">${col.name}</span>`;
         
         thContent.addEventListener('click', (e) => {
             if (e.target.classList.contains('ntb-db-resize-handle')) return;
@@ -730,6 +789,79 @@ export function renderDatabase(dbId, container) {
         handle.className = 'absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-500/50 active:bg-indigo-600 transition-colors ntb-db-resize-handle';
         setupColumnResize(handle, dbId, col.id);
         th.appendChild(handle);
+
+        // Eventos Drag & Drop para reordenación rápida de columnas
+        th.addEventListener('dragstart', (e) => {
+            if (e.target.classList.contains('ntb-db-resize-handle')) {
+                e.preventDefault();
+                return;
+            }
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', col.id);
+            th.classList.add('opacity-40', 'bg-indigo-50/50', 'dark:bg-indigo-950/30');
+            window.__ntb_dragged_col_id = col.id;
+            window.__ntb_dragged_db_id = dbId;
+        });
+
+        th.addEventListener('dragend', () => {
+            th.classList.remove('opacity-40', 'bg-indigo-50/50', 'dark:bg-indigo-950/30');
+            document.querySelectorAll('.ntb-db-drop-target').forEach(el => {
+                el.classList.remove('ntb-db-drop-target', 'border-l-2', 'border-r-2', 'border-indigo-500');
+            });
+            delete window.__ntb_dragged_col_id;
+            delete window.__ntb_dragged_db_id;
+        });
+
+        th.addEventListener('dragover', (e) => {
+            if (!window.__ntb_dragged_col_id || window.__ntb_dragged_db_id !== dbId) return;
+            if (window.__ntb_dragged_col_id === col.id) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const rect = th.getBoundingClientRect();
+            const midpoint = rect.left + rect.width / 2;
+            
+            th.classList.add('ntb-db-drop-target');
+            th.classList.remove('border-l-2', 'border-r-2', 'border-indigo-500');
+            if (e.clientX < midpoint) {
+                th.classList.add('border-l-2', 'border-indigo-500');
+            } else {
+                th.classList.add('border-r-2', 'border-indigo-500');
+            }
+        });
+
+        th.addEventListener('dragleave', () => {
+            th.classList.remove('ntb-db-drop-target', 'border-l-2', 'border-r-2', 'border-indigo-500');
+        });
+
+        th.addEventListener('drop', (e) => {
+            th.classList.remove('ntb-db-drop-target', 'border-l-2', 'border-r-2', 'border-indigo-500');
+            const draggedColId = window.__ntb_dragged_col_id || e.dataTransfer.getData('text/plain');
+            if (!draggedColId || window.__ntb_dragged_db_id !== dbId || draggedColId === col.id) return;
+            e.preventDefault();
+
+            const fromIndex = db.columns.findIndex(c => c.id === draggedColId);
+            let toIndex = db.columns.findIndex(c => c.id === col.id);
+            if (fromIndex === -1 || toIndex === -1) return;
+
+            const rect = th.getBoundingClientRect();
+            const midpoint = rect.left + rect.width / 2;
+            if (e.clientX >= midpoint && fromIndex < toIndex) {
+                // Posicionar a la derecha
+            } else if (e.clientX >= midpoint && fromIndex > toIndex) {
+                toIndex++;
+            } else if (e.clientX < midpoint && fromIndex < toIndex) {
+                toIndex--;
+            }
+
+            const [movedCol] = db.columns.splice(fromIndex, 1);
+            db.columns.splice(toIndex, 0, movedCol);
+
+            savePostsToStorage();
+            triggerEditorInput();
+            refreshDatabase(dbId);
+            showToast(`Columna "${movedCol.name}" reordenada`);
+        });
 
         headerRow.appendChild(th);
     });
@@ -773,7 +905,7 @@ export function renderDatabase(dbId, container) {
                 td.className = 'px-3 py-2 border-r border-slate-100 dark:border-slate-800/30 truncate align-middle cursor-pointer hover:bg-slate-100/20 dark:hover:bg-slate-800/5 relative group';
                 
                 const cellVal = row.cells[col.id];
-                td.innerHTML = renderCellValue(col, cellVal);
+                td.innerHTML = renderCellValue(col, cellVal, dbId, row.id);
 
                 td.addEventListener('click', (e) => {
                     if (e.target.closest('.ntb-db-checkbox-symbol')) {
@@ -868,7 +1000,7 @@ function refreshDatabase(dbId) {
 
 function getColumnTypeIcon(type) {
     switch (type) {
-        case 'text': return 'notes';
+        case 'text': return 'short_text';
         case 'number': return 'tag';
         case 'select': return 'arrow_drop_down_circle';
         case 'multiselect': return 'style';
@@ -876,6 +1008,7 @@ function getColumnTypeIcon(type) {
         case 'checkbox': return 'check_box';
         case 'url': return 'link';
         case 'status': return 'toggle_on';
+        case 'logo': return 'image';
         default: return 'help';
     }
 }
@@ -890,6 +1023,7 @@ function getColumnTypeName(type) {
         case 'checkbox': return 'Casilla';
         case 'url': return 'Enlace web';
         case 'status': return 'Estado';
+        case 'logo': return 'Logo';
         default: return type;
     }
 }
@@ -946,7 +1080,7 @@ function setupColumnResize(handle, dbId, columnId) {
 // 7. Visualización de Celdas (Render Cell)
 // ============================================================
 
-export function renderCellValue(column, value) {
+export function renderCellValue(column, value, dbId = null, rowId = null) {
     if (value === undefined || value === null || value === '') {
         if (column.type === 'checkbox') {
             return `<span class="material-symbols-outlined text-slate-300 dark:text-slate-700 hover:text-indigo-500/80 transition-colors text-xl ntb-db-checkbox-symbol">check_box_outline_blank</span>`;
@@ -955,8 +1089,24 @@ export function renderCellValue(column, value) {
     }
 
     switch (column.type) {
-        case 'text':
-            return `<span>${escapeHTML(String(value))}</span>`;
+        case 'text': {
+            let cellText = '';
+            let cellDesc = '';
+            if (typeof value === 'object' && value !== null) {
+                cellText = value.text || '';
+                cellDesc = value.description || '';
+            } else {
+                cellText = String(value);
+            }
+
+            if (!cellText && !cellDesc) return `<span class="text-slate-300 dark:text-slate-700 italic text-xs">Vacío</span>`;
+
+            const descIcon = cellDesc
+                ? `<span class="material-symbols-outlined text-indigo-500 text-xs shrink-0 cursor-pointer hover:scale-125 transition-transform ml-1" title="Ver descripción: ${escapeHTML(cellDesc.substring(0, 50))}" onclick="event.stopPropagation(); openCellDescriptionModal('${dbId}', '${rowId}', '${column.id}');">description</span>`
+                : (dbId && rowId ? `<span class="material-symbols-outlined text-slate-300 dark:text-slate-600 text-xs shrink-0 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-indigo-500 transition-all ml-1" title="Añadir descripción" onclick="event.stopPropagation(); openCellDescriptionModal('${dbId}', '${rowId}', '${column.id}');">add_notes</span>` : '');
+
+            return `<div class="flex items-center justify-between w-full overflow-hidden gap-1"><span class="truncate">${escapeHTML(cellText || 'Sin título')}</span>${descIcon}</div>`;
+        }
 
         case 'number':
             return `<span>${escapeHTML(formatNumberValue(value, column.options))}</span>`;
@@ -1009,6 +1159,16 @@ export function renderCellValue(column, value) {
             return `<span class="px-2 py-0.5 rounded text-xs font-medium select-none inline-flex items-center gap-1.5 ${colorClass}"><span class="w-1.5 h-1.5 rounded-full ${groupDotColor}"></span>${escapeHTML(choice.name)}</span>`;
         }
 
+        case 'logo': {
+            const logoUrl = value && typeof value === 'string' ? value.trim() : (value && typeof value === 'object' ? value.url || '' : '');
+            
+            if (logoUrl) {
+                return `<div class="flex items-center justify-center w-full h-full py-0.5"><img src="${escapeHTML(logoUrl)}" class="w-8 h-8 rounded-lg object-contain bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 shadow-xs cursor-pointer hover:scale-105 transition-transform" title="Haz clic para cambiar el logo" onclick="event.stopPropagation(); openLogoUrlModal('${dbId}', '${rowId}', '${column.id}');" onerror="this.onerror=null; this.src=''; this.parentElement.innerHTML='<span class=\\'text-[10px] text-rose-500 font-bold\\'>Error URL</span>';" /></div>`;
+            }
+
+            return `<button class="flex items-center justify-center gap-1 text-slate-300 dark:text-slate-600 hover:text-indigo-500 dark:hover:text-indigo-400 text-xs italic transition-colors w-full py-1" onclick="event.stopPropagation(); openLogoUrlModal('${dbId}', '${rowId}', '${column.id}');"><span class="material-symbols-outlined text-base">add_photo_alternate</span> <span class="text-[11px] font-medium">Logo</span></button>`;
+        }
+
         default:
             return `<span>${escapeHTML(String(value))}</span>`;
     }
@@ -1040,6 +1200,11 @@ export function openCellEditor(dbId, rowId, columnId, tdElement) {
 
     const currentValue = row.cells[columnId];
     
+    if (col.type === 'logo') {
+        openLogoUrlModal(dbId, rowId, columnId);
+        return;
+    }
+    
     // Crear contenedor del editor posicionado
     const rect = tdElement.getBoundingClientRect();
     
@@ -1061,7 +1226,7 @@ export function openCellEditor(dbId, rowId, columnId, tdElement) {
             input.value = currentValue || '';
         } else {
             input.type = 'text';
-            input.value = currentValue || '';
+            input.value = typeof currentValue === 'object' && currentValue !== null ? (currentValue.text || '') : (currentValue || '');
         }
 
         tdElement.style.position = 'relative';
@@ -1075,6 +1240,8 @@ export function openCellEditor(dbId, rowId, columnId, tdElement) {
             let newVal = input.value;
             if (col.type === 'number') {
                 newVal = newVal === '' ? null : parseFloat(newVal);
+            } else if (col.type === 'text' && typeof currentValue === 'object' && currentValue !== null) {
+                newVal = { ...currentValue, text: input.value };
             }
             updateCell(dbId, rowId, columnId, newVal);
             cleanup();
@@ -1129,7 +1296,7 @@ function openSelectDropdownEditor(dbId, rowId, col, currentValue, targetRect) {
     popup.appendChild(searchInput);
 
     const listContainer = document.createElement('div');
-    listContainer.className = 'max-h-48 overflow-y-auto space-y-0.5';
+    listContainer.className = 'max-h-48 overflow-y-auto space-y-1';
     popup.appendChild(listContainer);
 
     const renderList = (filter = '') => {
@@ -1156,8 +1323,8 @@ function openSelectDropdownEditor(dbId, rowId, col, currentValue, targetRect) {
         }
 
         filtered.forEach(choice => {
-            const btn = document.createElement('button');
-            btn.className = 'w-full text-left px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded flex items-center justify-between text-xs transition-colors group';
+            const itemRow = document.createElement('div');
+            itemRow.className = 'w-full flex items-center justify-between px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded text-xs transition-colors group relative gap-1';
             
             const badgeClass = getChipColorClasses(choice.color);
             const isSelected = col.type === 'multiselect'
@@ -1168,12 +1335,12 @@ function openSelectDropdownEditor(dbId, rowId, col, currentValue, targetRect) {
                 ? `<span class="w-1.5 h-1.5 rounded-full ${choice.group === 'done' ? 'bg-green-500' : (choice.group === 'in_progress' ? 'bg-amber-500' : 'bg-slate-400')}"></span>`
                 : '';
 
-            btn.innerHTML = `
-                <span class="px-2 py-0.5 rounded font-medium inline-flex items-center gap-1.5 ${badgeClass}">${groupDot}${escapeHTML(choice.name)}</span>
-                <span class="material-symbols-outlined text-indigo-500 text-base ${isSelected ? '' : 'opacity-0 group-hover:opacity-30'}">${col.type === 'multiselect' ? (isSelected ? 'check_box' : 'check_box_outline_blank') : 'check'}</span>
-            `;
-
-            btn.addEventListener('click', () => {
+            // Lado izquierdo: Chip interactivo
+            const chipBtn = document.createElement('button');
+            chipBtn.className = 'flex items-center gap-1.5 min-w-0 flex-1 text-left';
+            chipBtn.innerHTML = `<span class="px-2 py-0.5 rounded font-medium inline-flex items-center gap-1.5 truncate ${badgeClass}">${groupDot}${escapeHTML(choice.name)}</span>`;
+            
+            chipBtn.addEventListener('click', () => {
                 if (col.type === 'multiselect') {
                     let currentArr = Array.isArray(currentValue) ? [...currentValue] : [];
                     if (currentArr.includes(choice.id)) {
@@ -1182,7 +1349,6 @@ function openSelectDropdownEditor(dbId, rowId, col, currentValue, targetRect) {
                         currentArr.push(choice.id);
                     }
                     updateCell(dbId, rowId, col.id, currentArr);
-                    // No cerrar popup de multiselect para permitir múltiples checks
                     currentValue = currentArr;
                     renderList(searchInput.value);
                 } else {
@@ -1190,8 +1356,60 @@ function openSelectDropdownEditor(dbId, rowId, col, currentValue, targetRect) {
                     closeActivePopups();
                 }
             });
+            itemRow.appendChild(chipBtn);
 
-            listContainer.appendChild(btn);
+            // Controles de la opción (Seleccionado / Paleta / Editar / Borrar)
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'flex items-center gap-0.5 shrink-0';
+
+            // Checkmark de selección
+            if (isSelected) {
+                const checkIcon = document.createElement('span');
+                checkIcon.className = 'material-symbols-outlined text-indigo-500 text-base mr-1';
+                checkIcon.textContent = col.type === 'multiselect' ? 'check_box' : 'check';
+                actionsDiv.appendChild(checkIcon);
+            }
+
+            // Botón de Paleta de Color
+            const paletteBtn = document.createElement('button');
+            paletteBtn.className = 'p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-indigo-500 transition-colors opacity-0 group-hover:opacity-100 flex';
+            paletteBtn.title = 'Cambiar color';
+            paletteBtn.innerHTML = `<span class="material-symbols-outlined text-sm">palette</span>`;
+            paletteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openOptionColorPickerPopup(dbId, col.id, choice.id, paletteBtn, () => renderList(searchInput.value));
+            });
+            actionsDiv.appendChild(paletteBtn);
+
+            // Botón de Renombrar Opción
+            const editBtn = document.createElement('button');
+            editBtn.className = 'p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-indigo-500 transition-colors opacity-0 group-hover:opacity-100 flex';
+            editBtn.title = 'Renombrar opción';
+            editBtn.innerHTML = `<span class="material-symbols-outlined text-sm">edit_note</span>`;
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const newName = prompt('Nuevo nombre para la opción:', choice.name);
+                if (newName !== null && newName.trim() !== '') {
+                    renameChoice(dbId, col.id, choice.id, newName.trim());
+                    renderList(searchInput.value);
+                }
+            });
+            actionsDiv.appendChild(editBtn);
+
+            // Botón de Eliminar Opción
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'p-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100 flex';
+            deleteBtn.title = 'Eliminar opción';
+            deleteBtn.innerHTML = `<span class="material-symbols-outlined text-sm">delete</span>`;
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteChoice(dbId, col.id, choice.id);
+                renderList(searchInput.value);
+            });
+            actionsDiv.appendChild(deleteBtn);
+
+            itemRow.appendChild(actionsDiv);
+            listContainer.appendChild(itemRow);
         });
     };
 
@@ -1234,8 +1452,108 @@ function createNewChoiceForColumn(dbId, colId, name) {
     }
 
     col.options.choices.push(newChoice);
+    savePostsToStorage();
     triggerEditorInput();
     return newChoice;
+}
+
+export function updateChoiceColor(dbId, colId, choiceId, newColor) {
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const col = db.columns.find(c => c.id === colId);
+    if (!col || !col.options || !col.options.choices) return;
+
+    const choice = col.options.choices.find(c => c.id === choiceId);
+    if (choice) {
+        choice.color = newColor;
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+    }
+}
+
+export function renameChoice(dbId, colId, choiceId, newName) {
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const col = db.columns.find(c => c.id === colId);
+    if (!col || !col.options || !col.options.choices) return;
+
+    const choice = col.options.choices.find(c => c.id === choiceId);
+    if (choice) {
+        choice.name = newName.trim();
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+    }
+}
+
+export function deleteChoice(dbId, colId, choiceId) {
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const col = db.columns.find(c => c.id === colId);
+    if (!col || !col.options || !col.options.choices) return;
+
+    // Eliminar la opción del array de choices
+    col.options.choices = col.options.choices.filter(c => c.id !== choiceId);
+
+    // Limpiar referencias en las filas
+    db.rows.forEach(row => {
+        const val = row.cells[colId];
+        if (col.type === 'multiselect' && Array.isArray(val)) {
+            row.cells[colId] = val.filter(id => id !== choiceId);
+        } else if (val === choiceId) {
+            row.cells[colId] = null;
+        }
+    });
+
+    savePostsToStorage();
+    triggerEditorInput();
+    refreshDatabase(dbId);
+    showToast('Opción eliminada');
+}
+
+function openOptionColorPickerPopup(dbId, colId, choiceId, triggerBtn, onComplete) {
+    const rect = triggerBtn.getBoundingClientRect();
+    const popup = document.createElement('div');
+    popup.className = 'fixed z-[1000] bg-white dark:bg-[#202124] rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 p-2 text-xs flex flex-wrap gap-1.5 w-44 animate-in fade-in zoom-in duration-100';
+
+    let top = rect.bottom + window.scrollY + 2;
+    let left = rect.left + window.scrollX - 80;
+    if (left < 10) left = 10;
+
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
+
+    CHIP_COLORS.forEach(c => {
+        const colorBtn = document.createElement('button');
+        colorBtn.className = `w-5 h-5 rounded-full ${c.bg} border border-slate-300 dark:border-slate-700 hover:scale-110 transition-transform flex items-center justify-center`;
+        colorBtn.title = c.name;
+        colorBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            updateChoiceColor(dbId, colId, choiceId, c.hex);
+            popup.remove();
+            if (backdrop) backdrop.remove();
+            if (onComplete) onComplete();
+        });
+        popup.appendChild(colorBtn);
+    });
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fixed inset-0 z-[999] bg-transparent';
+    backdrop.addEventListener('click', (e) => {
+        e.stopPropagation();
+        popup.remove();
+        backdrop.remove();
+    });
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(popup);
 }
 
 // ============================================================
@@ -1254,11 +1572,24 @@ function openColumnConfigPopup(dbId, columnId, thElement) {
 
     const rect = thElement.getBoundingClientRect();
     const popup = document.createElement('div');
-    popup.className = 'fixed z-[999] bg-white dark:bg-[#202124] rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 p-3 w-64 text-sm animate-in fade-in zoom-in duration-100 flex flex-col gap-3';
+    popup.className = 'fixed z-[999] bg-white dark:bg-[#202124] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-3.5 w-64 text-sm animate-in fade-in zoom-in duration-100 flex flex-col gap-3 max-h-[80vh] overflow-y-auto no-scrollbar';
     
-    let top = rect.bottom + window.scrollY;
+    let top = rect.bottom + window.scrollY + 4;
     let left = rect.left + window.scrollX;
-    if (left + 256 > window.innerWidth) left = window.innerWidth - 270;
+    if (left + 260 > window.innerWidth) left = window.innerWidth - 275;
+    if (left < 10) left = 10;
+
+    const windowHeight = window.innerHeight;
+    const spaceBelow = windowHeight - rect.bottom - 16;
+    const spaceAbove = rect.top - 16;
+
+    if (spaceBelow < 350 && spaceAbove > spaceBelow) {
+        popup.style.maxHeight = `${Math.min(460, spaceAbove)}px`;
+        top = Math.max(10, rect.top + window.scrollY - Math.min(460, spaceAbove) - 4);
+    } else {
+        popup.style.maxHeight = `${Math.min(460, Math.max(220, spaceBelow))}px`;
+        top = rect.bottom + window.scrollY + 4;
+    }
 
     popup.style.top = `${top}px`;
     popup.style.left = `${left}px`;
@@ -1286,7 +1617,7 @@ function openColumnConfigPopup(dbId, columnId, thElement) {
     const typeSelect = document.createElement('select');
     typeSelect.className = 'w-full px-2 py-1.5 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1a1c1e] text-xs rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer';
     
-    const types = ['text', 'number', 'select', 'multiselect', 'date', 'checkbox', 'url', 'status'];
+    const types = ['text', 'number', 'select', 'multiselect', 'date', 'checkbox', 'url', 'status', 'logo'];
     types.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t;
@@ -1300,6 +1631,91 @@ function openColumnConfigPopup(dbId, columnId, thElement) {
         closeActivePopups();
     });
     popup.appendChild(typeSelect);
+
+    // Section: Gestión de Opciones de Etiquetas en Configuración
+    if (col.type === 'select' || col.type === 'multiselect' || col.type === 'status' || (col.options && col.options.choices && col.options.choices.length > 0)) {
+        const optionsLabel = document.createElement('label');
+        optionsLabel.className = 'text-xs text-slate-400 dark:text-slate-500 font-bold uppercase mt-1 block';
+        optionsLabel.textContent = 'Opciones de etiquetas';
+        popup.appendChild(optionsLabel);
+
+        const optionsContainer = document.createElement('div');
+        optionsContainer.className = 'max-h-36 overflow-y-auto space-y-1 pr-1 border border-slate-100 dark:border-slate-800 p-1.5 rounded-lg bg-slate-50/50 dark:bg-slate-900/30';
+
+        const renderConfigChoices = () => {
+            optionsContainer.innerHTML = '';
+            const choices = col.options?.choices || [];
+
+            if (choices.length === 0) {
+                optionsContainer.innerHTML = `<span class="text-[11px] text-slate-400 italic block p-1">No hay opciones creadas.</span>`;
+            } else {
+                choices.forEach(ch => {
+                    const row = document.createElement('div');
+                    row.className = 'flex items-center justify-between gap-1 p-1 bg-white dark:bg-[#1a1c1e] rounded border border-slate-200/60 dark:border-slate-800';
+
+                    const left = document.createElement('div');
+                    left.className = 'flex items-center gap-1.5 flex-1 min-w-0';
+
+                    // Botón paleta de color
+                    const paletteBtn = document.createElement('button');
+                    paletteBtn.className = `w-4 h-4 rounded-full border border-slate-300 dark:border-slate-700 shrink-0 ${getChipColorClasses(ch.color)}`;
+                    paletteBtn.title = 'Cambiar color';
+                    paletteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        openOptionColorPickerPopup(dbId, col.id, ch.id, paletteBtn, () => {
+                            savePostsToStorage();
+                            refreshDatabase(dbId);
+                            renderConfigChoices();
+                        });
+                    });
+                    left.appendChild(paletteBtn);
+
+                    // Input editable de nombre
+                    const nameIn = document.createElement('input');
+                    nameIn.className = 'bg-transparent border-0 text-xs font-medium text-slate-700 dark:text-slate-200 w-full focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1';
+                    nameIn.value = ch.name;
+                    nameIn.addEventListener('change', (e) => {
+                        renameChoice(dbId, col.id, ch.id, e.target.value);
+                    });
+                    left.appendChild(nameIn);
+
+                    row.appendChild(left);
+
+                    // Botón eliminar opción
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'p-0.5 text-slate-400 hover:text-rose-500 rounded transition-colors flex';
+                    delBtn.title = 'Eliminar opción';
+                    delBtn.innerHTML = `<span class="material-symbols-outlined text-sm">delete</span>`;
+                    delBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteChoice(dbId, col.id, ch.id);
+                        renderConfigChoices();
+                    });
+                    row.appendChild(delBtn);
+
+                    optionsContainer.appendChild(row);
+                });
+            }
+        };
+
+        renderConfigChoices();
+        popup.appendChild(optionsContainer);
+
+        // Botón para crear nueva opción desde la configuración
+        const addOptionBtn = document.createElement('button');
+        addOptionBtn.className = 'w-full py-1 px-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg flex items-center justify-center gap-1 transition-colors';
+        addOptionBtn.innerHTML = `<span class="material-symbols-outlined text-sm">add</span> Añadir opción`;
+        addOptionBtn.addEventListener('click', () => {
+            const optName = prompt('Nombre de la nueva opción:');
+            if (optName && optName.trim()) {
+                createNewChoiceForColumn(dbId, col.id, optName.trim());
+                savePostsToStorage();
+                refreshDatabase(dbId);
+                renderConfigChoices();
+            }
+        });
+        popup.appendChild(addOptionBtn);
+    }
 
     // 3. Botones de Acción (Sort, Eliminar, etc.)
     const divider = document.createElement('div');
@@ -1325,6 +1741,40 @@ function openColumnConfigPopup(dbId, columnId, thElement) {
         closeActivePopups();
     });
     popup.appendChild(sortDescBtn);
+
+    // Botones de Mover Columna a Izquierda / Derecha
+    const colIdx = db.columns.findIndex(c => c.id === columnId);
+    if (colIdx > 0) {
+        const moveLeftBtn = document.createElement('button');
+        moveLeftBtn.className = 'w-full text-left px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded text-xs flex items-center gap-2 text-slate-600 dark:text-slate-400';
+        moveLeftBtn.innerHTML = `<span class="material-symbols-outlined text-base">arrow_back</span> Mover a la izquierda`;
+        moveLeftBtn.addEventListener('click', () => {
+            const [movedCol] = db.columns.splice(colIdx, 1);
+            db.columns.splice(colIdx - 1, 0, movedCol);
+            savePostsToStorage();
+            triggerEditorInput();
+            refreshDatabase(dbId);
+            closeActivePopups();
+            showToast(`Columna "${movedCol.name}" movida a la izquierda`);
+        });
+        popup.appendChild(moveLeftBtn);
+    }
+
+    if (colIdx < db.columns.length - 1) {
+        const moveRightBtn = document.createElement('button');
+        moveRightBtn.className = 'w-full text-left px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded text-xs flex items-center gap-2 text-slate-600 dark:text-slate-400';
+        moveRightBtn.innerHTML = `<span class="material-symbols-outlined text-base">arrow_forward</span> Mover a la derecha`;
+        moveRightBtn.addEventListener('click', () => {
+            const [movedCol] = db.columns.splice(colIdx, 1);
+            db.columns.splice(colIdx + 1, 0, movedCol);
+            savePostsToStorage();
+            triggerEditorInput();
+            refreshDatabase(dbId);
+            closeActivePopups();
+            showToast(`Columna "${movedCol.name}" movida a la derecha`);
+        });
+        popup.appendChild(moveRightBtn);
+    }
 
     // Botón eliminar columna
     const delBtn = document.createElement('button');
@@ -1374,7 +1824,7 @@ function openColumnAddPopup(dbId, plusThElement) {
     const typeSelect = document.createElement('select');
     typeSelect.className = 'w-full px-2 py-1.5 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1a1c1e] text-xs rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer';
     
-    const types = ['text', 'number', 'select', 'multiselect', 'date', 'checkbox', 'url', 'status'];
+    const types = ['text', 'number', 'select', 'multiselect', 'date', 'checkbox', 'url', 'status', 'logo'];
     types.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t;
@@ -1465,6 +1915,7 @@ function openFilterPanel(dbId, triggerBtn) {
                 const newCol = db.columns.find(c => c.id === filter.columnId);
                 filter.operator = getDefaultOperator(newCol.type);
                 filter.value = '';
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
                 renderFilters();
@@ -1486,6 +1937,7 @@ function openFilterPanel(dbId, triggerBtn) {
             });
             opSel.addEventListener('change', (e) => {
                 filter.operator = e.target.value;
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
                 renderFilters();
@@ -1507,6 +1959,7 @@ function openFilterPanel(dbId, triggerBtn) {
                     });
                     valSel.addEventListener('change', (e) => {
                         filter.value = e.target.value;
+                        savePostsToStorage();
                         triggerEditorInput();
                         refreshDatabase(dbId);
                     });
@@ -1524,6 +1977,7 @@ function openFilterPanel(dbId, triggerBtn) {
                     });
                     valSel.addEventListener('change', (e) => {
                         filter.value = e.target.value;
+                        savePostsToStorage();
                         triggerEditorInput();
                         refreshDatabase(dbId);
                     });
@@ -1535,6 +1989,7 @@ function openFilterPanel(dbId, triggerBtn) {
                     dateIn.value = filter.value || '';
                     dateIn.addEventListener('change', (e) => {
                         filter.value = e.target.value;
+                        savePostsToStorage();
                         triggerEditorInput();
                         refreshDatabase(dbId);
                     });
@@ -1547,6 +2002,7 @@ function openFilterPanel(dbId, triggerBtn) {
                     valIn.value = filter.value || '';
                     valIn.addEventListener('input', (e) => {
                         filter.value = e.target.value;
+                        savePostsToStorage();
                         triggerEditorInput();
                         refreshDatabase(dbId);
                     });
@@ -1560,6 +2016,7 @@ function openFilterPanel(dbId, triggerBtn) {
             delBtn.innerHTML = `<span class="material-symbols-outlined text-base">close</span>`;
             delBtn.addEventListener('click', () => {
                 db.view.filters.splice(idx, 1);
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
                 renderFilters();
@@ -1581,6 +2038,7 @@ function openFilterPanel(dbId, triggerBtn) {
             operator: getDefaultOperator(firstCol.type),
             value: ''
         });
+        savePostsToStorage();
         triggerEditorInput();
         refreshDatabase(dbId);
         renderFilters();
@@ -1721,6 +2179,7 @@ function openSortPanel(dbId, triggerBtn) {
             });
             colSel.addEventListener('change', (e) => {
                 sort.columnId = e.target.value;
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
             });
@@ -1742,6 +2201,7 @@ function openSortPanel(dbId, triggerBtn) {
             });
             dirSel.addEventListener('change', (e) => {
                 sort.direction = e.target.value;
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
             });
@@ -1753,6 +2213,7 @@ function openSortPanel(dbId, triggerBtn) {
             delBtn.innerHTML = `<span class="material-symbols-outlined text-base">close</span>`;
             delBtn.addEventListener('click', () => {
                 db.view.sorts.splice(idx, 1);
+                savePostsToStorage();
                 triggerEditorInput();
                 refreshDatabase(dbId);
                 renderSorts();
@@ -1773,6 +2234,7 @@ function openSortPanel(dbId, triggerBtn) {
             columnId: firstCol.id,
             direction: 'asc'
         });
+        savePostsToStorage();
         triggerEditorInput();
         refreshDatabase(dbId);
         renderSorts();
@@ -1806,6 +2268,7 @@ function addSortRule(dbId, columnId, direction) {
         db.view.sorts.push({ columnId, direction });
     }
 
+    savePostsToStorage();
     triggerEditorInput();
     refreshDatabase(dbId);
 }
@@ -1858,14 +2321,45 @@ function openCalculationDropdown(dbId, columnId, footerCellEl) {
             { val: 'min', name: 'Fecha más antigua' },
             { val: 'max', name: 'Fecha más reciente' }
         );
+    } else if (col.type === 'select' || col.type === 'multiselect' || col.type === 'status' || (col.options && col.options.choices && col.options.choices.length > 0)) {
+        const choices = col.options?.choices || [];
+        if (choices.length > 0) {
+            fns.push({ isHeader: true, name: 'CONTEO POR ETIQUETA' });
+            choices.forEach(ch => {
+                fns.push({
+                    val: `count_choice_${ch.id}`,
+                    name: `Contar "${ch.name}"`,
+                    color: ch.color
+                });
+            });
+
+            fns.push({ isHeader: true, name: 'PORCENTAJE POR ETIQUETA' });
+            choices.forEach(ch => {
+                fns.push({
+                    val: `percent_choice_${ch.id}`,
+                    name: `% de "${ch.name}"`,
+                    color: ch.color
+                });
+            });
+        }
     }
 
     const currentFn = db.view.calculations[col.id] || 'none';
 
     fns.forEach(fn => {
+        if (fn.isHeader) {
+            const headerEl = document.createElement('div');
+            headerEl.className = 'px-2 py-1 text-[10px] font-bold tracking-wider text-slate-400 uppercase border-t border-slate-100 dark:border-slate-800 mt-1';
+            headerEl.textContent = fn.name;
+            popup.appendChild(headerEl);
+            return;
+        }
+
         const btn = document.createElement('button');
-        btn.className = `w-full text-left px-2.5 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800/80 rounded transition-colors flex items-center justify-between ${fn.val === currentFn ? 'text-indigo-500 font-semibold' : 'text-slate-600 dark:text-slate-400'}`;
-        btn.innerHTML = `<span>${fn.name}</span> ${fn.val === currentFn ? '<span class="material-symbols-outlined text-xs">check</span>' : ''}`;
+        btn.className = `w-full text-left px-2.5 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800/80 rounded transition-colors flex items-center justify-between text-xs ${fn.val === currentFn ? 'text-indigo-500 font-semibold bg-indigo-50/50 dark:bg-indigo-950/30' : 'text-slate-600 dark:text-slate-400'}`;
+        
+        const dot = fn.color ? `<span class="w-2 h-2 rounded-full inline-block mr-1.5 shrink-0 ${getChipColorClasses(fn.color)}"></span>` : '';
+        btn.innerHTML = `<span class="flex items-center truncate">${dot}${escapeHTML(fn.name)}</span> ${fn.val === currentFn ? '<span class="material-symbols-outlined text-xs shrink-0 ml-1">check</span>' : ''}`;
         
         btn.addEventListener('click', () => {
             if (fn.val === 'none') {
@@ -1873,6 +2367,7 @@ function openCalculationDropdown(dbId, columnId, footerCellEl) {
             } else {
                 db.view.calculations[col.id] = fn.val;
             }
+            savePostsToStorage();
             triggerEditorInput();
             refreshDatabase(dbId);
             closeActivePopups();
@@ -1905,7 +2400,27 @@ function openDatabaseMenu(dbId, triggerBtn) {
     popup.style.top = `${top}px`;
     popup.style.left = `${left}px`;
 
-    // 1. Duplicar Base de Datos
+    // 1. Propiedades y Columnas (Panel de Ajustes)
+    const colMgrBtn = document.createElement('button');
+    colMgrBtn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 rounded flex items-center gap-2 transition-colors font-medium';
+    colMgrBtn.innerHTML = `<span class="material-symbols-outlined text-base">view_column</span> Propiedades y columnas`;
+    colMgrBtn.addEventListener('click', () => {
+        closeActivePopups();
+        openDatabaseColumnManager(dbId, triggerBtn);
+    });
+    popup.appendChild(colMgrBtn);
+
+    // 2. Copiar Base de Datos (al portapapeles)
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 rounded flex items-center gap-2 transition-colors';
+    copyBtn.innerHTML = `<span class="material-symbols-outlined text-base">copy_all</span> Copiar base de datos`;
+    copyBtn.addEventListener('click', () => {
+        copyDatabaseToClipboard(dbId);
+        closeActivePopups();
+    });
+    popup.appendChild(copyBtn);
+
+    // 3. Duplicar Base de Datos
     const dupBtn = document.createElement('button');
     dupBtn.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 rounded flex items-center gap-2 transition-colors';
     dupBtn.innerHTML = `<span class="material-symbols-outlined text-base">content_copy</span> Duplicar base de datos`;
@@ -1941,6 +2456,199 @@ function openDatabaseMenu(dbId, triggerBtn) {
         closeActivePopups();
     });
     popup.appendChild(delBtn);
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fixed inset-0 z-[998] bg-transparent';
+    backdrop.addEventListener('click', () => closeActivePopups());
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(popup);
+    
+    activePopup = { popup, backdrop };
+}
+
+// ============================================================
+// 11b. Panel de Ajustes y Propiedades de Columnas
+// ============================================================
+
+export function openDatabaseColumnManager(dbId, triggerBtn) {
+    closeActivePopups();
+
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+
+    const rect = triggerBtn ? triggerBtn.getBoundingClientRect() : { top: 100, left: 100 };
+    const popup = document.createElement('div');
+    popup.className = 'fixed z-[999] bg-white dark:bg-[#202124] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 w-80 text-xs animate-in fade-in zoom-in duration-100 flex flex-col gap-3 max-h-[85vh]';
+    
+    let top = rect.bottom + window.scrollY + 4;
+    let left = rect.left + window.scrollX - 250;
+    if (left < 10) left = 10;
+    if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+    if (top + 400 > window.innerHeight + window.scrollY) top = Math.max(10, window.innerHeight + window.scrollY - 420);
+
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
+
+    function renderColumnList() {
+        popup.innerHTML = '';
+
+        // Header del popup
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5';
+        header.innerHTML = `
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-indigo-500 text-lg">view_column</span>
+                <span class="font-bold text-slate-800 dark:text-slate-100 text-sm">Propiedades y Columnas</span>
+            </div>
+            <button class="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full flex" id="ntb-close-col-mgr">
+                <span class="material-symbols-outlined text-base">close</span>
+            </button>
+        `;
+        popup.appendChild(header);
+
+        const closeBtn = header.querySelector('#ntb-close-col-mgr');
+        if (closeBtn) closeBtn.addEventListener('click', () => closeActivePopups());
+
+        // Contenedor de la lista de columnas
+        const listContainer = document.createElement('div');
+        listContainer.className = 'flex flex-col gap-2 overflow-y-auto max-h-72 pr-1 no-scrollbar';
+
+        db.columns.forEach((col, idx) => {
+            const item = document.createElement('div');
+            item.className = 'flex items-center justify-between p-2 bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200/80 dark:border-slate-800 rounded-xl gap-2 transition-all hover:border-indigo-300 dark:hover:border-indigo-800';
+            item.setAttribute('draggable', 'true');
+
+            // Grupo izquierdo: Manejador drag, icono y nombre editable
+            const leftGroup = document.createElement('div');
+            leftGroup.className = 'flex items-center gap-2 flex-1 min-w-0';
+            
+            const dragHandle = document.createElement('span');
+            dragHandle.className = 'material-symbols-outlined text-slate-400 cursor-grab text-base shrink-0 hover:text-slate-600 dark:hover:text-slate-200';
+            dragHandle.textContent = 'drag_indicator';
+
+            const colIcon = document.createElement('span');
+            colIcon.className = 'material-symbols-outlined text-indigo-500 text-base shrink-0';
+            colIcon.textContent = getColumnTypeIcon(col.type);
+
+            const nameInput = document.createElement('input');
+            nameInput.className = 'bg-transparent border-0 font-medium text-slate-700 dark:text-slate-200 text-xs focus:bg-white dark:focus:bg-slate-800 focus:ring-1 focus:ring-indigo-500 rounded px-1 py-0.5 w-full truncate focus:outline-none';
+            nameInput.value = col.name;
+            nameInput.addEventListener('change', (e) => {
+                renameColumn(dbId, col.id, e.target.value);
+                savePostsToStorage();
+                refreshDatabase(dbId);
+            });
+
+            leftGroup.appendChild(dragHandle);
+            leftGroup.appendChild(colIcon);
+            leftGroup.appendChild(nameInput);
+            item.appendChild(leftGroup);
+
+            // Grupo derecho: Botones Subir, Bajar y Eliminar
+            const rightGroup = document.createElement('div');
+            rightGroup.className = 'flex items-center gap-1 shrink-0';
+
+            // Botón Subir
+            const upBtn = document.createElement('button');
+            upBtn.className = `p-1 rounded text-slate-400 hover:text-indigo-600 hover:bg-slate-200 dark:hover:bg-slate-800 flex transition-colors ${idx === 0 ? 'opacity-30 pointer-events-none' : ''}`;
+            upBtn.title = 'Subir columna';
+            upBtn.innerHTML = `<span class="material-symbols-outlined text-sm">keyboard_arrow_up</span>`;
+            upBtn.addEventListener('click', () => {
+                if (idx > 0) {
+                    const [moved] = db.columns.splice(idx, 1);
+                    db.columns.splice(idx - 1, 0, moved);
+                    savePostsToStorage();
+                    triggerEditorInput();
+                    refreshDatabase(dbId);
+                    renderColumnList();
+                }
+            });
+            rightGroup.appendChild(upBtn);
+
+            // Botón Bajar
+            const downBtn = document.createElement('button');
+            downBtn.className = `p-1 rounded text-slate-400 hover:text-indigo-600 hover:bg-slate-200 dark:hover:bg-slate-800 flex transition-colors ${idx === db.columns.length - 1 ? 'opacity-30 pointer-events-none' : ''}`;
+            downBtn.title = 'Bajar columna';
+            downBtn.innerHTML = `<span class="material-symbols-outlined text-sm">keyboard_arrow_down</span>`;
+            downBtn.addEventListener('click', () => {
+                if (idx < db.columns.length - 1) {
+                    const [moved] = db.columns.splice(idx, 1);
+                    db.columns.splice(idx + 1, 0, moved);
+                    savePostsToStorage();
+                    triggerEditorInput();
+                    refreshDatabase(dbId);
+                    renderColumnList();
+                }
+            });
+            rightGroup.appendChild(downBtn);
+
+            // Botón Eliminar
+            const delBtn = document.createElement('button');
+            delBtn.className = `p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 flex transition-colors ${db.columns.length <= 1 ? 'opacity-30 pointer-events-none' : ''}`;
+            delBtn.title = 'Eliminar columna';
+            delBtn.innerHTML = `<span class="material-symbols-outlined text-sm">delete</span>`;
+            delBtn.addEventListener('click', () => {
+                if (db.columns.length > 1) {
+                    deleteColumn(dbId, col.id);
+                    savePostsToStorage();
+                    renderColumnList();
+                }
+            });
+            rightGroup.appendChild(delBtn);
+
+            item.appendChild(rightGroup);
+
+            // Drag and drop entre los elementos de la lista
+            item.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', idx);
+                item.classList.add('opacity-40');
+            });
+            item.addEventListener('dragend', () => {
+                item.classList.remove('opacity-40');
+            });
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+            });
+            item.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                const toIdx = idx;
+                if (!isNaN(fromIdx) && fromIdx !== toIdx) {
+                    const [moved] = db.columns.splice(fromIdx, 1);
+                    db.columns.splice(toIdx, 0, moved);
+                    savePostsToStorage();
+                    triggerEditorInput();
+                    refreshDatabase(dbId);
+                    renderColumnList();
+                }
+            });
+
+            listContainer.appendChild(item);
+        });
+
+        popup.appendChild(listContainer);
+
+        // Pie del popup: Botón añadir nueva columna
+        const footer = document.createElement('div');
+        footer.className = 'border-t border-slate-100 dark:border-slate-800 pt-2.5 flex justify-between items-center';
+        
+        const addBtn = document.createElement('button');
+        addBtn.className = 'w-full py-2 px-3 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors text-xs';
+        addBtn.innerHTML = `<span class="material-symbols-outlined text-base">add</span> Nueva columna`;
+        addBtn.addEventListener('click', () => {
+            addColumn(dbId);
+            savePostsToStorage();
+            renderColumnList();
+        });
+        footer.appendChild(addBtn);
+
+        popup.appendChild(footer);
+    }
+
+    renderColumnList();
 
     const backdrop = document.createElement('div');
     backdrop.className = 'fixed inset-0 z-[998] bg-transparent';
@@ -2068,3 +2776,361 @@ document.addEventListener('mousedown', (e) => {
 });
 
 // Notificaciones delegadas a toast.js
+
+window.openDatabaseColumnManager = openDatabaseColumnManager;
+
+// ============================================================
+// 14. Copiar al Portapapeles y Clonar al Pegar
+// ============================================================
+
+export function copyDatabaseToClipboard(dbId) {
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const payload = {
+        type: 'ntb-database-clip',
+        version: '1.0',
+        data: db
+    };
+    const jsonStr = JSON.stringify(payload);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(jsonStr).then(() => {
+            localStorage.setItem('ntb_copied_database', jsonStr);
+            showToast('Base de datos copiada al portapapeles');
+        }).catch(() => {
+            localStorage.setItem('ntb_copied_database', jsonStr);
+            showToast('Base de datos copiada al portapapeles');
+        });
+    } else {
+        localStorage.setItem('ntb_copied_database', jsonStr);
+        showToast('Base de datos copiada al portapapeles');
+    }
+}
+
+export function pasteClonedDatabase(dbData) {
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post) return;
+
+    if (!post.databases) post.databases = {};
+
+    const newDbId = crypto.randomUUID();
+    const clonedDb = JSON.parse(JSON.stringify(dbData));
+    clonedDb.id = newDbId;
+    if (clonedDb.title) {
+        clonedDb.title = clonedDb.title + ' (Copia)';
+    }
+
+    post.databases[newDbId] = clonedDb;
+
+    const selection = window.getSelection();
+    let range = null;
+    if (selection.rangeCount > 0) {
+        range = selection.getRangeAt(0);
+    }
+
+    const html = `<div class="ntb-database-block my-6" data-db-id="${newDbId}" contenteditable="false"></div><p><br></p>`;
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+
+    const docContent = document.getElementById('doc-content');
+    
+    if (range && docContent && docContent.contains(range.commonAncestorContainer)) {
+        range.deleteContents();
+        let lastNode = null;
+        while (tempDiv.firstChild) {
+            lastNode = tempDiv.firstChild;
+            range.insertNode(lastNode);
+        }
+        if (lastNode) {
+            range.setStartAfter(lastNode);
+            range.setEndAfter(lastNode);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+    } else if (docContent) {
+        let lastNode = null;
+        while (tempDiv.firstChild) {
+            lastNode = tempDiv.firstChild;
+            docContent.appendChild(lastNode);
+        }
+    }
+
+    const container = document.querySelector(`.ntb-database-block[data-db-id="${newDbId}"]`);
+    if (container) {
+        renderDatabase(newDbId, container);
+    }
+
+    savePostsToStorage();
+    triggerEditorInput();
+    showToast('Base de datos pegada y clonada con éxito');
+}
+
+// Escuchar evento paste en el documento para detectar bases de datos copiadas
+document.addEventListener('paste', (e) => {
+    // Si se está editando una celda o un input normal, no interceptar
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') && !e.target.classList.contains('ntb-db-cell-editor')) {
+        return;
+    }
+
+    const clipboardText = (e.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+    let dbData = null;
+
+    if (clipboardText && clipboardText.includes('ntb-database-clip')) {
+        try {
+            const parsed = JSON.parse(clipboardText);
+            if (parsed && parsed.type === 'ntb-database-clip' && parsed.data) {
+                dbData = parsed.data;
+            }
+        } catch (err) {}
+    }
+
+    if (!dbData) {
+        const fallbackText = localStorage.getItem('ntb_copied_database');
+        if (fallbackText && fallbackText.includes('ntb-database-clip') && (!clipboardText || clipboardText.trim() === '')) {
+            try {
+                const parsed = JSON.parse(fallbackText);
+                if (parsed && parsed.type === 'ntb-database-clip' && parsed.data) {
+                    dbData = parsed.data;
+                }
+            } catch (err) {}
+        }
+    }
+
+    if (dbData) {
+        e.preventDefault();
+        e.stopPropagation();
+        pasteClonedDatabase(dbData);
+    }
+});
+
+window.copyDatabaseToClipboard = copyDatabaseToClipboard;
+window.pasteClonedDatabase = pasteClonedDatabase;
+
+// ============================================================
+// 15. Modal de Descripción Oculta / Extendida para Celdas
+// ============================================================
+
+export function openCellDescriptionModal(dbId, rowId, colId) {
+    closeActivePopups();
+
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const col = db.columns.find(c => c.id === colId);
+    const row = db.rows.find(r => r.id === rowId);
+    if (!col || !row) return;
+
+    const cellVal = row.cells[colId];
+    let initialText = '';
+    let initialDesc = '';
+
+    if (typeof cellVal === 'object' && cellVal !== null) {
+        initialText = cellVal.text || '';
+        initialDesc = cellVal.description || '';
+    } else if (cellVal !== undefined && cellVal !== null) {
+        initialText = String(cellVal);
+    }
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 transition-all duration-300';
+
+    const container = document.createElement('div');
+    container.className = 'w-full max-w-lg bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform transition-all duration-300 flex flex-col max-h-[85vh]';
+
+    container.innerHTML = `
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-indigo-500">description</span>
+                <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Descripción Extendida — ${escapeHTML(col.name)}</span>
+            </div>
+            <button id="ntb-close-desc-modal" class="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full flex transition-colors">
+                <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+        </div>
+        <div class="p-5 space-y-4 flex-1 overflow-y-auto">
+            <div>
+                <label for="ntb-desc-text-input" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Texto Principal (Visible en celda)</label>
+                <input id="ntb-desc-text-input" type="text" value="${escapeHTML(initialText)}" placeholder="Ej: Título, resumen..." class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 dark:text-slate-200">
+            </div>
+            <div>
+                <label for="ntb-desc-area-input" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Descripción Oculta / Notas</label>
+                <textarea id="ntb-desc-area-input" rows="6" placeholder="Escribe detalles extendidos, notas o información sobre este campo..." class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 dark:text-slate-200 resize-y">${escapeHTML(initialDesc)}</textarea>
+            </div>
+        </div>
+        <div class="flex items-center justify-between px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0 gap-2">
+            <button id="ntb-clear-desc-btn" class="px-3.5 py-2 text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-full transition-colors flex items-center gap-1">
+                <span class="material-symbols-outlined text-sm">delete</span> Borrar descripción
+            </button>
+            <div class="flex items-center gap-2">
+                <button id="ntb-cancel-desc-btn" class="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button id="ntb-save-desc-btn" class="px-5 py-2 text-xs font-bold bg-indigo-600 text-white rounded-full hover:shadow-md transition-all">Guardar</button>
+            </div>
+        </div>
+    `;
+
+    backdrop.appendChild(container);
+    document.body.appendChild(backdrop);
+
+    const closeSelf = () => backdrop.remove();
+
+    backdrop.querySelector('#ntb-close-desc-modal').addEventListener('click', closeSelf);
+    backdrop.querySelector('#ntb-cancel-desc-btn').addEventListener('click', closeSelf);
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeSelf();
+    });
+
+    backdrop.querySelector('#ntb-clear-desc-btn').addEventListener('click', () => {
+        const textVal = backdrop.querySelector('#ntb-desc-text-input').value.trim();
+        updateCell(dbId, rowId, colId, textVal);
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+        showToast('Descripción eliminada');
+        closeSelf();
+    });
+
+    backdrop.querySelector('#ntb-save-desc-btn').addEventListener('click', () => {
+        const textVal = backdrop.querySelector('#ntb-desc-text-input').value.trim();
+        const descVal = backdrop.querySelector('#ntb-desc-area-input').value.trim();
+
+        if (descVal) {
+            updateCell(dbId, rowId, colId, { text: textVal, description: descVal });
+        } else {
+            updateCell(dbId, rowId, colId, textVal);
+        }
+
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+        showToast('Descripción guardada');
+        closeSelf();
+    });
+
+    setTimeout(() => {
+        const area = backdrop.querySelector('#ntb-desc-area-input');
+        if (area) area.focus();
+    }, 50);
+}
+
+window.openCellDescriptionModal = openCellDescriptionModal;
+
+// ============================================================
+// 16. Modal de URL para Atributo de Columna 'Logo'
+// ============================================================
+
+export function openLogoUrlModal(dbId, rowId, colId) {
+    closeActivePopups();
+
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || !post.databases || !post.databases[dbId]) return;
+
+    const db = post.databases[dbId];
+    const col = db.columns.find(c => c.id === colId);
+    const row = db.rows.find(r => r.id === rowId);
+    if (!col || !row) return;
+
+    const currentUrl = row.cells[colId] || '';
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 transition-all duration-300';
+
+    const container = document.createElement('div');
+    container.className = 'w-full max-w-md bg-white dark:bg-[#202124] rounded-2xl shadow-2xl overflow-hidden transform transition-all duration-300 flex flex-col max-h-[85vh] text-xs';
+
+    container.innerHTML = `
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-indigo-500">image</span>
+                <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Imagen de Logo — ${escapeHTML(col.name)}</span>
+            </div>
+            <button id="ntb-close-logo-modal" class="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full flex transition-colors">
+                <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+        </div>
+        <div class="p-5 space-y-4 flex-1 overflow-y-auto">
+            <div>
+                <label for="ntb-logo-url-input" class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">URL de la imagen del logo</label>
+                <input id="ntb-logo-url-input" type="url" value="${escapeHTML(currentUrl)}" placeholder="https://ejemplo.com/logo.png" class="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 dark:text-slate-200">
+            </div>
+            
+            <!-- Vista Previa de la Imagen -->
+            <div>
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2 block">Vista Previa</span>
+                <div class="w-full h-32 rounded-xl bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-700 flex items-center justify-center p-3 relative overflow-hidden">
+                    <img id="ntb-logo-preview-img" src="${escapeHTML(currentUrl)}" class="max-h-full max-w-full object-contain rounded ${currentUrl ? '' : 'hidden'}" onerror="this.classList.add('hidden'); document.getElementById('ntb-logo-preview-placeholder').classList.remove('hidden');" onload="this.classList.remove('hidden'); document.getElementById('ntb-logo-preview-placeholder').classList.add('hidden');" />
+                    <div id="ntb-logo-preview-placeholder" class="flex flex-col items-center gap-1 text-slate-400 dark:text-slate-500 ${currentUrl ? 'hidden' : ''}">
+                        <span class="material-symbols-outlined text-3xl">image</span>
+                        <span class="text-[11px]">Ingresa una URL válida</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex items-center justify-between px-5 py-4 border-t border-slate-100 dark:border-slate-800 shrink-0 gap-2">
+            <button id="ntb-clear-logo-btn" class="px-3 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-full transition-colors flex items-center gap-1 ${currentUrl ? '' : 'hidden'}">
+                <span class="material-symbols-outlined text-sm">delete</span> Eliminar logo
+            </button>
+            <div class="flex items-center gap-2 ml-auto">
+                <button id="ntb-cancel-logo-btn" class="px-4 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">Cancelar</button>
+                <button id="ntb-save-logo-btn" class="px-5 py-1.5 text-xs font-bold bg-indigo-600 text-white rounded-full hover:shadow-md transition-all">Guardar Logo</button>
+            </div>
+        </div>
+    `;
+
+    backdrop.appendChild(container);
+    document.body.appendChild(backdrop);
+
+    const input = backdrop.querySelector('#ntb-logo-url-input');
+    const previewImg = backdrop.querySelector('#ntb-logo-preview-img');
+    const placeholder = backdrop.querySelector('#ntb-logo-preview-placeholder');
+
+    input.addEventListener('input', (e) => {
+        const val = e.target.value.trim();
+        if (val) {
+            previewImg.src = val;
+            previewImg.classList.remove('hidden');
+            placeholder.classList.add('hidden');
+        } else {
+            previewImg.src = '';
+            previewImg.classList.add('hidden');
+            placeholder.classList.remove('hidden');
+        }
+    });
+
+    const closeSelf = () => backdrop.remove();
+
+    backdrop.querySelector('#ntb-close-logo-modal').addEventListener('click', closeSelf);
+    backdrop.querySelector('#ntb-cancel-logo-btn').addEventListener('click', closeSelf);
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeSelf();
+    });
+
+    backdrop.querySelector('#ntb-clear-logo-btn').addEventListener('click', () => {
+        updateCell(dbId, rowId, colId, '');
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+        showToast('Logo eliminado');
+        closeSelf();
+    });
+
+    backdrop.querySelector('#ntb-save-logo-btn').addEventListener('click', () => {
+        const urlVal = input.value.trim();
+        updateCell(dbId, rowId, colId, urlVal);
+        savePostsToStorage();
+        triggerEditorInput();
+        refreshDatabase(dbId);
+        showToast('Logo guardado');
+        closeSelf();
+    });
+
+    setTimeout(() => {
+        input.focus();
+        input.select();
+    }, 50);
+}
+
+window.openLogoUrlModal = openLogoUrlModal;
+

@@ -2182,21 +2182,111 @@ export function closeMoreMenu() {
 }
 
 export function changeCoverPhotoPrompt() {
+    openCoverPhotoModal();
+}
+
+export function openCoverPhotoModal() {
     if (!currentPostId) return;
     const post = posts.find(p => p.id === currentPostId);
     if (!post || post.trashed) return;
 
-    const url = prompt('Introduce la URL de la imagen de portada:', post.cover || '');
-    if (url === null) return;
+    const backdrop = document.getElementById('cover-photo-dialog-backdrop');
+    const container = document.getElementById('cover-photo-dialog-container');
+    const input = document.getElementById('cover-photo-url-input');
+    const deleteBtn = document.getElementById('cover-photo-delete-btn');
+    const errorMsg = document.getElementById('cover-photo-error-msg');
 
-    const trimmedUrl = url.trim();
+    if (!backdrop || !container || !input) return;
+
+    input.value = post.cover || '';
+    if (errorMsg) {
+        errorMsg.classList.add('hidden');
+        errorMsg.textContent = '';
+    }
+
+    if (deleteBtn) {
+        if (post.cover) {
+            deleteBtn.classList.remove('hidden');
+        } else {
+            deleteBtn.classList.add('hidden');
+        }
+    }
+
+    previewCoverPhotoUrl(input.value);
+
+    backdrop.classList.remove('hidden');
+    setTimeout(() => {
+        container.classList.remove('scale-95');
+        container.classList.add('scale-100');
+        input.focus();
+        if (input.value) input.select();
+    }, 10);
+}
+
+export function closeCoverPhotoModal() {
+    const backdrop = document.getElementById('cover-photo-dialog-backdrop');
+    const container = document.getElementById('cover-photo-dialog-container');
+    if (!backdrop || !container) return;
+
+    container.classList.remove('scale-100');
+    container.classList.add('scale-95');
+    setTimeout(() => {
+        backdrop.classList.add('hidden');
+    }, 150);
+}
+
+export function previewCoverPhotoUrl(url) {
+    const previewContainer = document.getElementById('cover-photo-preview-container');
+    const previewImg = document.getElementById('cover-photo-preview-img');
+    const previewError = document.getElementById('cover-photo-preview-error');
+    const errorMsg = document.getElementById('cover-photo-error-msg');
+
+    if (errorMsg) errorMsg.classList.add('hidden');
+
+    const trimmed = (url || '').trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
+        if (previewContainer) previewContainer.classList.add('hidden');
+        return;
+    }
+
+    if (previewContainer && previewImg) {
+        if (previewError) previewError.classList.add('hidden');
+        previewImg.src = trimmed;
+        previewContainer.classList.remove('hidden');
+    }
+}
+
+export function handleCoverPreviewError() {
+    const previewError = document.getElementById('cover-photo-preview-error');
+    if (previewError) {
+        previewError.classList.remove('hidden');
+    }
+}
+
+export function submitCoverPhotoModal() {
+    if (!currentPostId) return;
+    const post = posts.find(p => p.id === currentPostId);
+    if (!post || post.trashed) return;
+
+    const input = document.getElementById('cover-photo-url-input');
+    const errorMsg = document.getElementById('cover-photo-error-msg');
+    if (!input) return;
+
+    const trimmedUrl = input.value.trim();
+
     if (trimmedUrl === '') {
         deleteCoverPhoto();
+        closeCoverPhotoModal();
         return;
     }
 
     if (!/^https?:\/\//i.test(trimmedUrl)) {
-        showToast('Por favor, introduce una URL válida (http://... o https://...)');
+        if (errorMsg) {
+            errorMsg.textContent = 'Por favor, introduce una URL válida que empiece por http:// o https://';
+            errorMsg.classList.remove('hidden');
+        } else {
+            showToast('Por favor, introduce una URL válida (http://... o https://...)');
+        }
         return;
     }
 
@@ -2206,6 +2296,12 @@ export function changeCoverPhotoPrompt() {
     updateEditorCoverUI(post);
     renderFileTree();
     showToast('Foto de portada actualizada');
+    closeCoverPhotoModal();
+}
+
+export function deleteCoverPhotoFromModal() {
+    deleteCoverPhoto();
+    closeCoverPhotoModal();
 }
 
 export function deleteCoverPhoto() {
@@ -2227,4 +2323,10 @@ window.updateEditorCoverUI = updateEditorCoverUI;
 window.toggleMoreMenu = toggleMoreMenu;
 window.closeMoreMenu = closeMoreMenu;
 window.changeCoverPhotoPrompt = changeCoverPhotoPrompt;
+window.openCoverPhotoModal = openCoverPhotoModal;
+window.closeCoverPhotoModal = closeCoverPhotoModal;
+window.previewCoverPhotoUrl = previewCoverPhotoUrl;
+window.handleCoverPreviewError = handleCoverPreviewError;
+window.submitCoverPhotoModal = submitCoverPhotoModal;
+window.deleteCoverPhotoFromModal = deleteCoverPhotoFromModal;
 window.deleteCoverPhoto = deleteCoverPhoto;

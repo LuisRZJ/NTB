@@ -1,7 +1,7 @@
 document.getElementById('header-mount').innerHTML = `
   <div class="header">
     <div class="header-left">
-      <a href="../index.html" class="header-home">
+      <a href="index.html" class="header-home">
         <h1>Mis <em>Tareas</em></h1>
       </a>
       <div class="date" id="date-label"></div>

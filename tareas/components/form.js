@@ -19,6 +19,10 @@ document.getElementById('form-mount').innerHTML = `
         <span class="nav-fab-item-icon">◷</span>
         <span class="nav-fab-item-label">Historial</span>
       </button>
+      <button class="nav-fab-item" data-nav="docs">
+        <span class="nav-fab-item-icon">⚡</span>
+        <span class="nav-fab-item-label">API REST</span>
+      </button>
       <button class="nav-fab-item" data-nav="ajustes">
         <span class="nav-fab-item-icon">⊙</span>
         <span class="nav-fab-item-label">Ajustes</span>

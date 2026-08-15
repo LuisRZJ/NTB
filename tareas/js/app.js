@@ -1152,6 +1152,8 @@ function isOverlayBlockingPrioritySwipe() {
     '.settings-overlay.open',
     '.projects-overlay.open',
     '.stats-overlay.open',
+    '.history-overlay.open',
+    '.docs-overlay.open',
     '.day-progress-overlay.open',
     '.snooze-detail-overlay.open'
   ].join(','));
@@ -1273,6 +1275,7 @@ function triggerSearchRender(immediate = false) {
   updateDayRing();
   scheduleMinuteTick();
   initHistory();
+  initDocs();
   await migrateHistoryRetroactive();
   document.getElementById('loader').classList.add('hidden');
 
@@ -2084,6 +2087,7 @@ document.querySelectorAll('.nav-fab-item[data-nav]').forEach(btn => {
   if (btn.dataset.nav === 'proyectos') return; // wired in initProjects
   if (btn.dataset.nav === 'estadistica') return; // wired in initStats
   if (btn.dataset.nav === 'historial')   return; // wired in initHistory
+  if (btn.dataset.nav === 'docs')        return; // wired in initDocs
   btn.addEventListener('click', () => {
     closeNav();
     // TODO: implementar sección correspondiente
@@ -4401,3 +4405,207 @@ function toggleFieldVisibility(inputId, button) {
   }
 }
 window.toggleFieldVisibility = toggleFieldVisibility;
+
+// ══════════════════════════════════════════
+// DOCS / API REST OVERLAY
+// ══════════════════════════════════════════
+let docsOverlay = null;
+
+function openDocs() {
+  if (!docsOverlay) docsOverlay = document.getElementById('docs-overlay');
+  if (!docsOverlay) return;
+  docsOverlay.classList.add('open');
+  docsOverlay.setAttribute('aria-hidden', 'false');
+
+  // Auto-llenar token si hay sesión activa
+  const tokenInput = document.getElementById('docs-test-token');
+  if (tokenInput && !tokenInput.value) {
+    const savedPass = sessionStorage.getItem('github_sync_pass') || localStorage.getItem('github_sync_pass') || (typeof GITHUB_PASS !== 'undefined' ? GITHUB_PASS : '');
+    if (savedPass) tokenInput.value = savedPass;
+  }
+
+  // Auto-detectar zona horaria
+  const tzInput = document.getElementById('docs-test-tz');
+  if (tzInput && (!tzInput.value || tzInput.value === 'America/Mexico_City')) {
+    try {
+      tzInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+    } catch(e) {
+      tzInput.value = 'America/Mexico_City';
+    }
+  }
+}
+
+function closeDocs() {
+  if (!docsOverlay) docsOverlay = document.getElementById('docs-overlay');
+  if (!docsOverlay) return;
+  docsOverlay.classList.remove('open');
+  docsOverlay.setAttribute('aria-hidden', 'true');
+}
+
+function initDocs() {
+  docsOverlay = document.getElementById('docs-overlay');
+  const closeBtn = document.getElementById('docs-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeDocs);
+  if (docsOverlay) {
+    docsOverlay.addEventListener('click', e => {
+      if (e.target === docsOverlay) closeDocs();
+    });
+  }
+
+  // Botón del Nav FAB
+  const navBtn = document.querySelector('.nav-fab-item[data-nav="docs"]');
+  if (navBtn) {
+    navBtn.addEventListener('click', () => {
+      closeNav();
+      openDocs();
+    });
+  }
+
+  // Eye toggle de visibilidad del token
+  const tokenToggleBtn = document.getElementById('docs-token-toggle-btn');
+  if (tokenToggleBtn) {
+    tokenToggleBtn.addEventListener('click', () => {
+      toggleFieldVisibility('docs-test-token', tokenToggleBtn);
+    });
+  }
+
+  // Ejecutar consulta en Playground
+  const executeBtn = document.getElementById('btn-docs-execute');
+  if (executeBtn) {
+    executeBtn.addEventListener('click', runDocsApiTest);
+  }
+
+  // Copiar JSON
+  const copyJsonBtn = document.getElementById('btn-docs-copy-json');
+  if (copyJsonBtn) {
+    copyJsonBtn.addEventListener('click', () => {
+      const outputPre = document.getElementById('docs-test-output');
+      if (outputPre && outputPre.textContent) {
+        navigator.clipboard.writeText(outputPre.textContent).then(() => {
+          showToast('✓ JSON copiado al portapapeles');
+        }).catch(() => {
+          showToast('Error al copiar');
+        });
+      }
+    });
+  }
+
+  // Tabs de Snippets de Código
+  document.querySelectorAll('.docs-snippet-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.docs-snippet-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      const targetId = `pane-${tab.dataset.snippet}`;
+      document.querySelectorAll('.docs-snippet-pane').forEach(p => p.classList.remove('active'));
+      const targetPane = document.getElementById(targetId);
+      if (targetPane) targetPane.classList.add('active');
+    });
+  });
+
+  // Copiar Snippets
+  document.querySelectorAll('.docs-copy-snippet-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.target;
+      const pane = document.getElementById(targetId);
+      if (!pane) return;
+      const codeEl = pane.querySelector('code') || pane.querySelector('pre') || pane;
+      navigator.clipboard.writeText(codeEl.innerText.trim()).then(() => {
+        showToast('✓ Código copiado al portapapeles');
+      }).catch(() => {
+        showToast('Error al copiar');
+      });
+    });
+  });
+}
+
+async function runDocsApiTest() {
+  const endpoint = document.getElementById('docs-test-endpoint')?.value || '/api/tareas';
+  const authMode = document.getElementById('docs-test-authmode')?.value || 'bearer';
+  const token = document.getElementById('docs-test-token')?.value.trim() || '';
+  const dateVal = document.getElementById('docs-test-date')?.value || '';
+  const tzVal = document.getElementById('docs-test-tz')?.value.trim() || '';
+  const includeOverdue = document.getElementById('docs-test-overdue')?.checked || false;
+
+  const loadingEl = document.getElementById('docs-test-loading');
+  const executeBtn = document.getElementById('btn-docs-execute');
+  const outputWrap = document.getElementById('docs-test-output-wrap');
+  const outputPre = document.getElementById('docs-test-output');
+  const statusBadge = document.getElementById('docs-res-status-badge');
+  const timeEl = document.getElementById('docs-res-time');
+  const rateLimitEl = document.getElementById('docs-res-ratelimit');
+
+  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (executeBtn) executeBtn.disabled = true;
+
+  const url = new URL(endpoint, window.location.origin);
+  if (dateVal) url.searchParams.set('date', dateVal);
+  if (tzVal) url.searchParams.set('tz', tzVal);
+  if (includeOverdue) url.searchParams.set('include_overdue', 'true');
+  if (authMode === 'query' && token) {
+    url.searchParams.set('token', token);
+  }
+
+  const headers = {};
+  if (authMode === 'bearer' && token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (authMode === 'header' && token) {
+    headers['x-api-key'] = token;
+  }
+
+  const startTime = performance.now();
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers
+    });
+
+    const duration = Math.round(performance.now() - startTime);
+    const data = await response.json().catch(() => ({ error: 'Respuesta no parseable como JSON' }));
+
+    if (timeEl) timeEl.textContent = `${duration}ms`;
+
+    const limit = response.headers.get('X-RateLimit-Limit') || '30';
+    const remaining = response.headers.get('X-RateLimit-Remaining');
+    if (rateLimitEl) {
+      rateLimitEl.textContent = remaining !== null ? `Rate Limit: ${remaining}/${limit}` : `Rate Limit: 30 req/min`;
+    }
+
+    if (statusBadge) {
+      statusBadge.textContent = `${response.status} ${response.statusText || (response.ok ? 'OK' : 'Error')}`;
+      if (response.status === 200) {
+        statusBadge.style.background = 'rgba(16,185,129,0.15)';
+        statusBadge.style.color = '#10b981';
+      } else if (response.status === 401 || response.status === 403) {
+        statusBadge.style.background = 'rgba(239,68,68,0.15)';
+        statusBadge.style.color = '#ef4444';
+      } else if (response.status === 429) {
+        statusBadge.style.background = 'rgba(245,158,11,0.15)';
+        statusBadge.style.color = '#f59e0b';
+      } else {
+        statusBadge.style.background = 'rgba(148,163,184,0.15)';
+        statusBadge.style.color = '#94a3b8';
+      }
+    }
+
+    if (outputPre) outputPre.textContent = JSON.stringify(data, null, 2);
+    if (outputWrap) outputWrap.classList.remove('hidden');
+
+  } catch (err) {
+    const duration = Math.round(performance.now() - startTime);
+    if (timeEl) timeEl.textContent = `${duration}ms`;
+    if (statusBadge) {
+      statusBadge.textContent = 'Error de Red';
+      statusBadge.style.background = 'rgba(239,68,68,0.15)';
+      statusBadge.style.color = '#ef4444';
+    }
+    if (outputPre) outputPre.textContent = JSON.stringify({ error: 'Fallo de conexión', detalle: err.message }, null, 2);
+    if (outputWrap) outputWrap.classList.remove('hidden');
+  } finally {
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (executeBtn) executeBtn.disabled = false;
+  }
+}
+
+window.openDocs = openDocs;
+window.closeDocs = closeDocs;

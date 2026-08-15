@@ -4,6 +4,14 @@
     {
       "src": "/api/sync",
       "dest": "/api/sync.js"
+    },
+    {
+      "src": "/api/tareas",
+      "dest": "/api/tareas.js"
+    },
+    {
+      "src": "/api/tasks",
+      "dest": "/api/tareas.js"
     }
   ]
 }

@@ -154,6 +154,11 @@
                 <span class="material-symbols-outlined">analytics</span>
                 <span>Estadísticas</span>
             </button>
+            <!-- Documentation Button -->
+            <button onclick="switchTab('docs')" id="side-tab-docs" class="nav-tab w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">menu_book</span>
+                <span>Documentación</span>
+            </button>
             <!-- Settings Button -->
             <button onclick="switchTab('settings')" id="side-tab-settings" class="nav-tab w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 transition-all font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
                 <span class="material-symbols-outlined">storage</span>
@@ -620,6 +625,325 @@
                 </div>
             </div>
 
+            <!-- Documentation View (SPA panel) -->
+            <div id="docs-view" class="hidden max-w-4xl mx-auto bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/80 dark:border-slate-800/80 shadow-md p-6 sm:p-8 space-y-8 transition-all duration-300">
+                <!-- Header -->
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 dark:border-slate-800">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 shadow-sm">
+                            <span class="material-symbols-outlined text-2xl">menu_book</span>
+                        </div>
+                        <div>
+                            <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">Documentación de API</h2>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Guía de integración para consultar tareas del día desde cualquier backend o frontend estático.</p>
+                        </div>
+                    </div>
+                    <!-- Badges -->
+                    <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+                        <span class="px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/50 dark:border-emerald-800/40">GET /api/tareas</span>
+                        <span class="px-2.5 py-1 rounded-full bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/40">30 req/min</span>
+                        <span class="px-2.5 py-1 rounded-full bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200/50 dark:border-purple-800/40">CORS Habilitado</span>
+                    </div>
+                </div>
+
+                <!-- 1. Interactive Playground / Probador de API -->
+                <div class="bg-gradient-to-br from-slate-50 to-indigo-50/30 dark:from-[#1a1c1e] dark:to-[#171c26] rounded-2xl p-5 sm:p-6 border border-slate-200/70 dark:border-slate-800/80 shadow-sm space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                            <span class="material-symbols-outlined text-lg text-indigo-500">play_circle</span>
+                            Probador de API en Vivo (Playground)
+                        </h3>
+                        <span class="text-[11px] text-slate-500 dark:text-slate-400">Ejecuta consultas en tiempo real</span>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <!-- Endpoint selection -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Ruta del Endpoint</label>
+                            <select id="docs-test-endpoint" class="w-full text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="/api/tareas">/api/tareas (Principal)</option>
+                                <option value="/api/tasks">/api/tasks (Alias)</option>
+                            </select>
+                        </div>
+
+                        <!-- Auth method -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Método de Autenticación</label>
+                            <select id="docs-test-authmode" class="w-full text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="bearer">Header: Authorization: Bearer</option>
+                                <option value="header">Header: x-api-key</option>
+                                <option value="query">URL Param: ?token=</option>
+                            </select>
+                        </div>
+
+                        <!-- Token input -->
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Token de API / Contraseña de Sincronización</label>
+                            <div class="relative">
+                                <input type="password" id="docs-test-token" placeholder="Ingresa tu clave de sincronización o TASKS_API_KEY" class="w-full text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl pl-3 pr-10 py-2 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                                <button type="button" onclick="toggleFieldVisibility('docs-test-token', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none flex items-center">
+                                    <span class="material-symbols-outlined text-base">visibility</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Optional Date -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Fecha Específica (Opcional, por defecto Hoy)</label>
+                            <input type="date" id="docs-test-date" class="w-full text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <!-- Timezone -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Zona Horaria (IANA)</label>
+                            <input type="text" id="docs-test-tz" placeholder="America/Mexico_City" value="America/Mexico_City" class="w-full text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <!-- Overdue checkbox -->
+                        <div class="sm:col-span-2 flex items-center gap-2">
+                            <input type="checkbox" id="docs-test-overdue" class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            <label for="docs-test-overdue" class="text-xs text-slate-600 dark:text-slate-300 font-medium">Incluir tareas atrasadas no completadas de días previos (<code>?include_overdue=true</code>)</label>
+                        </div>
+                    </div>
+
+                    <!-- Action buttons -->
+                    <div class="flex items-center justify-between pt-2">
+                        <button onclick="runDocsApiTest()" id="btn-docs-execute" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center gap-2">
+                            <span class="material-symbols-outlined text-sm">send</span>
+                            <span>Ejecutar Consulta</span>
+                        </button>
+                        <span id="docs-test-loading" class="hidden text-xs text-indigo-600 dark:text-indigo-400 font-medium animate-pulse flex items-center gap-1.5">
+                            <span class="material-symbols-outlined text-sm animate-spin">sync</span>
+                            Consultando API...
+                        </span>
+                    </div>
+
+                    <!-- Response Output Container -->
+                    <div id="docs-test-output-wrap" class="hidden space-y-3 pt-3 border-t border-slate-200/80 dark:border-slate-800">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div class="flex items-center gap-2">
+                                <span id="docs-res-status-badge" class="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">200 OK</span>
+                                <span id="docs-res-time" class="text-[11px] text-slate-500 dark:text-slate-400">45ms</span>
+                                <span id="docs-res-ratelimit" class="text-[11px] text-slate-500 dark:text-slate-400">Rate Limit: 29/30</span>
+                            </div>
+                            <button onclick="copyDocsOutput()" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-medium flex items-center gap-1">
+                                <span class="material-symbols-outlined text-sm">content_copy</span>
+                                <span>Copiar JSON</span>
+                            </button>
+                        </div>
+                        <pre id="docs-test-output" class="p-4 rounded-xl bg-slate-900 text-emerald-400 text-[11px] font-mono overflow-x-auto max-h-80 select-all border border-slate-800 leading-relaxed"></pre>
+                    </div>
+                </div>
+
+                <!-- 2. Endpoints & Methods Table -->
+                <div class="space-y-3">
+                    <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-indigo-500 text-base">route</span>
+                        Endpoints Disponibles
+                    </h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-xs text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase text-[10px] tracking-wider">
+                                    <th class="py-2.5 px-3">Método</th>
+                                    <th class="py-2.5 px-3">Ruta</th>
+                                    <th class="py-2.5 px-3">Descripción</th>
+                                    <th class="py-2.5 px-3">Tipo</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
+                                <tr>
+                                    <td class="py-2.5 px-3 font-bold text-emerald-600 dark:text-emerald-400">GET</td>
+                                    <td class="py-2.5 px-3 font-mono font-semibold">/api/tareas</td>
+                                    <td class="py-2.5 px-3">Retorna las tareas pendientes del día ordenadas por prioridad (Alta > Media > Baja > Hora).</td>
+                                    <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-medium">Solo Lectura</span></td>
+                                </tr>
+                                <tr>
+                                    <td class="py-2.5 px-3 font-bold text-emerald-600 dark:text-emerald-400">GET</td>
+                                    <td class="py-2.5 px-3 font-mono font-semibold">/api/tasks</td>
+                                    <td class="py-2.5 px-3">Alias idéntico en inglés para integración en scripts internacionales.</td>
+                                    <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-medium">Solo Lectura</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 3. Parámetros de Consulta (Query Params) -->
+                <div class="space-y-3">
+                    <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-indigo-500 text-base">tune</span>
+                        Parámetros de Consulta (Query String)
+                    </h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-xs text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase text-[10px] tracking-wider">
+                                    <th class="py-2.5 px-3">Parámetro</th>
+                                    <th class="py-2.5 px-3">Tipo</th>
+                                    <th class="py-2.5 px-3">Valor por Defecto</th>
+                                    <th class="py-2.5 px-3">Descripción</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
+                                <tr>
+                                    <td class="py-2.5 px-3 font-mono font-semibold text-indigo-600 dark:text-indigo-400">date</td>
+                                    <td class="py-2.5 px-3 font-mono">string (YYYY-MM-DD)</td>
+                                    <td class="py-2.5 px-3 italic text-slate-400">Fecha actual local</td>
+                                    <td class="py-2.5 px-3">Filtra las tareas de una fecha específica en vez del día de hoy. Ej: <code>2026-08-16</code></td>
+                                </tr>
+                                <tr>
+                                    <td class="py-2.5 px-3 font-mono font-semibold text-indigo-600 dark:text-indigo-400">tz</td>
+                                    <td class="py-2.5 px-3 font-mono">string (IANA Timezone)</td>
+                                    <td class="py-2.5 px-3 font-mono text-slate-500">America/Mexico_City</td>
+                                    <td class="py-2.5 px-3">Zona horaria para calcular con exactitud la fecha del día. Ej: <code>America/Bogota</code>, <code>Europe/Madrid</code></td>
+                                </tr>
+                                <tr>
+                                    <td class="py-2.5 px-3 font-mono font-semibold text-indigo-600 dark:text-indigo-400">include_overdue</td>
+                                    <td class="py-2.5 px-3 font-mono">boolean (true/false)</td>
+                                    <td class="py-2.5 px-3 font-mono text-slate-500">false</td>
+                                    <td class="py-2.5 px-3">Si es <code>true</code>, incluye en el listado las tareas atrasadas no completadas de días anteriores.</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-2.5 px-3 font-mono font-semibold text-indigo-600 dark:text-indigo-400">token / key</td>
+                                    <td class="py-2.5 px-3 font-mono">string</td>
+                                    <td class="py-2.5 px-3 italic text-slate-400">Ninguno</td>
+                                    <td class="py-2.5 px-3">Método alternativo para enviar la clave de autenticación directamente en la URL (ideal para Atajos de iOS).</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 4. Seguridad, Autenticación y Rate Limiting -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Security Card -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-200/70 dark:border-slate-800 space-y-2.5">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                            <span class="material-symbols-outlined text-amber-500 text-sm">security</span>
+                            Autenticación & Variables
+                        </h4>
+                        <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                            Para proteger tu privacidad, la API requiere autenticación. Puedes configurar tu clave mediante la variable de entorno <code class="font-mono bg-slate-200 dark:bg-slate-800 px-1 py-0.5 rounded">TASKS_API_KEY</code> o <code class="font-mono bg-slate-200 dark:bg-slate-800 px-1 py-0.5 rounded">SYNC_PASSWORD</code> en Vercel.
+                        </p>
+                        <div class="text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
+                            <p>• Header: <code class="font-mono text-slate-700 dark:text-slate-300">Authorization: Bearer &lt;TOKEN&gt;</code></p>
+                            <p>• Header: <code class="font-mono text-slate-700 dark:text-slate-300">x-api-key: &lt;TOKEN&gt;</code></p>
+                            <p>• Query: <code class="font-mono text-slate-700 dark:text-slate-300">?token=&lt;TOKEN&gt;</code></p>
+                        </div>
+                    </div>
+
+                    <!-- Rate Limiting & CORS Card -->
+                    <div class="bg-slate-50 dark:bg-[#1a1c1e] rounded-2xl p-5 border border-slate-200/70 dark:border-slate-800 space-y-2.5">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                            <span class="material-symbols-outlined text-blue-500 text-sm">speed</span>
+                            Rate Limiting & CORS
+                        </h4>
+                        <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                            • <strong>Límite:</strong> 30 peticiones por minuto por IP. Si se excede, devuelve <code class="font-mono text-red-500">HTTP 429 Too Many Requests</code> con <code class="font-mono">Retry-After: 60</code>.
+                        </p>
+                        <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                            • <strong>CORS:</strong> Cabeceras <code class="font-mono">Access-Control-Allow-Origin: *</code> habilitadas para consultar la API desde cualquier página estática o aplicación web.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 5. Code Integration Examples -->
+                <div class="space-y-3">
+                    <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-indigo-500 text-base">code</span>
+                        Ejemplos de Integración
+                    </h3>
+
+                    <!-- Snippet Tabs -->
+                    <div class="flex gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto no-scrollbar">
+                        <button onclick="switchSnippetTab('curl')" id="tab-btn-curl" class="snippet-tab-btn active px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300">cURL (Terminal)</button>
+                        <button onclick="switchSnippetTab('js')" id="tab-btn-js" class="snippet-tab-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">JavaScript / Fetch</button>
+                        <button onclick="switchSnippetTab('python')" id="tab-btn-python" class="snippet-tab-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Python</button>
+                        <button onclick="switchSnippetTab('ios')" id="tab-btn-ios" class="snippet-tab-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Atajos de iOS</button>
+                        <button onclick="switchSnippetTab('homeassistant')" id="tab-btn-homeassistant" class="snippet-tab-btn px-3 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Home Assistant</button>
+                    </div>
+
+                    <!-- Snippet Containers -->
+                    <div class="relative">
+                        <!-- cURL -->
+                        <div id="snippet-curl" class="snippet-content space-y-2">
+                            <pre class="p-4 rounded-xl bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto leading-relaxed"><code>curl -X GET "https://tu-dominio.vercel.app/api/tareas?tz=America/Mexico_City" \
+     -H "Authorization: Bearer TU_TOKEN_AQUI"</code></pre>
+                            <button onclick="copySnippet('snippet-curl')" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><span class="material-symbols-outlined text-sm">content_copy</span> Copiar comando</button>
+                        </div>
+
+                        <!-- JavaScript / Fetch -->
+                        <div id="snippet-js" class="snippet-content hidden space-y-2">
+                            <pre class="p-4 rounded-xl bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto leading-relaxed"><code>async function obtenerTareasDeHoy() {
+  const res = await fetch('https://tu-dominio.vercel.app/api/tareas?tz=America/Mexico_City', {
+    method: 'GET',
+    headers: {
+      'Authorization': 'Bearer TU_TOKEN_AQUI'
+    }
+  });
+
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  console.log(`Tienes ${data.total_pendientes} tareas pendientes:`, data.tareas);
+  return data;
+}</code></pre>
+                            <button onclick="copySnippet('snippet-js')" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><span class="material-symbols-outlined text-sm">content_copy</span> Copiar código</button>
+                        </div>
+
+                        <!-- Python -->
+                        <div id="snippet-python" class="snippet-content hidden space-y-2">
+                            <pre class="p-4 rounded-xl bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto leading-relaxed"><code>import requests
+
+url = "https://tu-dominio.vercel.app/api/tareas"
+headers = {"Authorization": "Bearer TU_TOKEN_AQUI"}
+params = {"tz": "America/Mexico_City", "include_overdue": "false"}
+
+response = requests.get(url, headers=headers, params=params)
+if response.status_code == 200:
+    data = response.json()
+    print(f"Total pendientes: {data['total_pendientes']}")
+    for t in data["tareas"]:
+        print(f"[{t['prioridad_texto']}] {t['titulo']} - {t['hora_vencimiento'] or 'Todo el día'}")
+else:
+    print(f"Error {response.status_code}: {response.text}")</code></pre>
+                            <button onclick="copySnippet('snippet-python')" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><span class="material-symbols-outlined text-sm">content_copy</span> Copiar código</button>
+                        </div>
+
+                        <!-- iOS Shortcuts -->
+                        <div id="snippet-ios" class="snippet-content hidden space-y-2">
+                            <div class="p-4 rounded-xl bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 space-y-2">
+                                <p class="font-bold text-indigo-600 dark:text-indigo-400">Paso a paso en Atajos de Apple (iOS / macOS):</p>
+                                <ol class="list-decimal list-inside space-y-1 text-slate-600 dark:text-slate-400 leading-relaxed">
+                                    <li>Añade la acción <strong>Obtener contenido de URL</strong>.</li>
+                                    <li>URL: <code class="font-mono text-slate-800 dark:text-slate-200">https://tu-dominio.vercel.app/api/tareas?token=TU_TOKEN_AQUI</code></li>
+                                    <li>Método: <strong>GET</strong>.</li>
+                                    <li>Añade la acción <strong>Obtener diccionario a partir de entrada</strong>.</li>
+                                    <li>Extrae la clave <code class="font-mono">total_pendientes</code> o itera sobre <code class="font-mono">tareas</code> para mostrar una notificación o widget interactivo.</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- Home Assistant -->
+                        <div id="snippet-homeassistant" class="snippet-content hidden space-y-2">
+                            <pre class="p-4 rounded-xl bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto leading-relaxed"><code># configuration.yaml (Home Assistant REST Sensor)
+sensor:
+  - platform: rest
+    name: "Tareas Pendientes de Hoy"
+    resource: "https://tu-dominio.vercel.app/api/tareas?tz=America/Mexico_City"
+    headers:
+      Authorization: "Bearer TU_TOKEN_AQUI"
+    value_template: "{{ value_json.total_pendientes }}"
+    json_attributes:
+      - resumen_prioridad
+      - tareas
+    scan_interval: 900 # Consulta cada 15 minutos (respeta el Rate Limit)</code></pre>
+                            <button onclick="copySnippet('snippet-homeassistant')" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><span class="material-symbols-outlined text-sm">content_copy</span> Copiar configuración YAML</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Empty State -->
             <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 text-center">
                 <div class="w-24 h-24 rounded-full bg-slate-200/50 dark:bg-slate-800/40 flex items-center justify-center text-slate-400 dark:text-slate-600 mb-4">
@@ -717,6 +1041,11 @@
             <button onclick="switchTab('metrics'); toggleMobileSidebar();" class="mob-drawer-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
                 <span class="material-symbols-outlined">analytics</span>
                 <span>Estadísticas</span>
+            </button>
+            <!-- Documentation Button -->
+            <button onclick="switchTab('docs'); toggleMobileSidebar();" class="mob-drawer-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">
+                <span class="material-symbols-outlined">menu_book</span>
+                <span>Documentación</span>
             </button>
             <!-- Settings Button -->
             <button onclick="switchTab('settings'); toggleMobileSidebar();" class="mob-drawer-btn w-full flex items-center gap-4 px-4 py-3 rounded-full text-slate-700 dark:text-slate-300 font-medium text-sm [&.active]:bg-google-sidebarActive dark:[&.active]:bg-google-sidebarActiveDark [&.active]:text-[#001d35] dark:[&.active]:text-[#c2e7ff]">

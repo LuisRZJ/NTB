@@ -78,6 +78,7 @@ export function refreshNotesView() {
     const emptyState = document.getElementById('empty-state');
     const settingsView = document.getElementById('settings-view');
     const metricsView = document.getElementById('metrics-view');
+    const docsView = document.getElementById('docs-view');
     const quickNoteContainer = document.getElementById('quick-note-container');
     const categoryChips = document.getElementById('category-filter-chips');
 
@@ -93,6 +94,7 @@ export function refreshNotesView() {
         quickNoteContainer?.classList.add('hidden');
         categoryChips?.classList.add('hidden');
         metricsView?.classList.add('hidden');
+        docsView?.classList.add('hidden');
         settingsView?.classList.remove('hidden');
 
         document.getElementById('fab-create-note')?.classList.add('hidden');
@@ -117,6 +119,7 @@ export function refreshNotesView() {
         quickNoteContainer?.classList.add('hidden');
         categoryChips?.classList.add('hidden');
         settingsView?.classList.add('hidden');
+        docsView?.classList.add('hidden');
         metricsView?.classList.remove('hidden');
 
         document.getElementById('fab-create-note')?.classList.add('hidden');
@@ -131,8 +134,47 @@ export function refreshNotesView() {
         return;
     }
 
+    if (state.currentTab === 'docs') {
+        notesGrid.innerHTML = '';
+        pinnedGrid.innerHTML = '';
+        pinnedSection?.classList.add('hidden');
+        otherSectionTitle?.classList.add('hidden');
+        emptyState?.classList.add('hidden');
+        
+        quickNoteContainer?.classList.add('hidden');
+        categoryChips?.classList.add('hidden');
+        settingsView?.classList.add('hidden');
+        metricsView?.classList.add('hidden');
+        docsView?.classList.remove('hidden');
+
+        document.getElementById('fab-create-note')?.classList.add('hidden');
+        document.getElementById('search-bar-container')?.classList.add('hidden');
+        document.getElementById('layout-toggle-btn')?.classList.add('hidden');
+
+        // Auto-completar token si hay sesión activa
+        const tokenInput = document.getElementById('docs-test-token');
+        if (tokenInput && !tokenInput.value) {
+            const savedPass = sessionStorage.getItem('github_sync_pass') || localStorage.getItem('github_sync_pass');
+            if (savedPass) tokenInput.value = savedPass;
+        }
+
+        // Auto-detectar zona horaria
+        const tzInput = document.getElementById('docs-test-tz');
+        if (tzInput && !tzInput.value) {
+            try {
+                tzInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City';
+            } catch(e) {
+                tzInput.value = 'America/Mexico_City';
+            }
+        }
+
+        updateBadgesCounts();
+        return;
+    }
+
     settingsView?.classList.add('hidden');
     metricsView?.classList.add('hidden');
+    docsView?.classList.add('hidden');
     quickNoteContainer?.classList.remove('hidden');
     categoryChips?.classList.remove('hidden');
 
@@ -210,7 +252,7 @@ export function refreshNotesView() {
 function attachScrollLoadMore() {
     if (isScrollHandlerAttached) return;
     window.addEventListener('scroll', () => {
-        if (state.currentTab === 'settings' || state.currentTab === 'metrics') return;
+        if (state.currentTab === 'settings' || state.currentTab === 'metrics' || state.currentTab === 'docs') return;
         
         if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 500) {
             if (currentLimit < activeOtherNotes.length) {
@@ -466,3 +508,139 @@ window.switchTab = switchTab;
 window.filterByLabel = filterByLabel;
 window.clearSearch = clearSearch;
 window.toggleMobileSidebar = toggleMobileSidebar;
+
+// ── Funciones para el Probador Interactivo de la API (Documentación) ──
+async function runDocsApiTest() {
+    const endpoint = document.getElementById('docs-test-endpoint')?.value || '/api/tareas';
+    const authMode = document.getElementById('docs-test-authmode')?.value || 'bearer';
+    const token = document.getElementById('docs-test-token')?.value.trim() || '';
+    const dateVal = document.getElementById('docs-test-date')?.value || '';
+    const tzVal = document.getElementById('docs-test-tz')?.value.trim() || '';
+    const includeOverdue = document.getElementById('docs-test-overdue')?.checked || false;
+
+    const loadingEl = document.getElementById('docs-test-loading');
+    const executeBtn = document.getElementById('btn-docs-execute');
+    const outputWrap = document.getElementById('docs-test-output-wrap');
+    const outputPre = document.getElementById('docs-test-output');
+    const statusBadge = document.getElementById('docs-res-status-badge');
+    const timeEl = document.getElementById('docs-res-time');
+    const rateLimitEl = document.getElementById('docs-res-ratelimit');
+
+    if (loadingEl) loadingEl.classList.remove('hidden');
+    if (executeBtn) executeBtn.disabled = true;
+
+    // Construir URL y Query Params
+    const url = new URL(endpoint, window.location.origin);
+    if (dateVal) url.searchParams.set('date', dateVal);
+    if (tzVal) url.searchParams.set('tz', tzVal);
+    if (includeOverdue) url.searchParams.set('include_overdue', 'true');
+    if (authMode === 'query' && token) {
+        url.searchParams.set('token', token);
+    }
+
+    const headers = {};
+    if (authMode === 'bearer' && token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    } else if (authMode === 'header' && token) {
+        headers['x-api-key'] = token;
+    }
+
+    const startTime = performance.now();
+    try {
+        const response = await fetch(url.toString(), {
+            method: 'GET',
+            headers
+        });
+
+        const duration = Math.round(performance.now() - startTime);
+        const data = await response.json().catch(() => ({ error: 'Respuesta no parseable como JSON' }));
+
+        if (timeEl) timeEl.textContent = `${duration}ms`;
+
+        // Rate limit header
+        const limit = response.headers.get('X-RateLimit-Limit') || '30';
+        const remaining = response.headers.get('X-RateLimit-Remaining');
+        if (rateLimitEl) {
+            rateLimitEl.textContent = remaining !== null ? `Rate Limit: ${remaining}/${limit}` : `Rate Limit: 30 req/min`;
+        }
+
+        // Status badge
+        if (statusBadge) {
+            statusBadge.textContent = `${response.status} ${response.statusText || (response.ok ? 'OK' : 'Error')}`;
+            if (response.status === 200) {
+                statusBadge.className = 'px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300';
+            } else if (response.status === 401 || response.status === 403) {
+                statusBadge.className = 'px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+            } else if (response.status === 429) {
+                statusBadge.className = 'px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+            } else {
+                statusBadge.className = 'px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300';
+            }
+        }
+
+        if (outputPre) {
+            outputPre.textContent = JSON.stringify(data, null, 2);
+        }
+        if (outputWrap) outputWrap.classList.remove('hidden');
+
+    } catch (err) {
+        const duration = Math.round(performance.now() - startTime);
+        if (timeEl) timeEl.textContent = `${duration}ms`;
+        if (statusBadge) {
+            statusBadge.textContent = 'Error de Red';
+            statusBadge.className = 'px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+        }
+        if (outputPre) {
+            outputPre.textContent = JSON.stringify({ error: 'Fallo al conectar con el servidor', detalle: err.message }, null, 2);
+        }
+        if (outputWrap) outputWrap.classList.remove('hidden');
+    } finally {
+        if (loadingEl) loadingEl.classList.add('hidden');
+        if (executeBtn) executeBtn.disabled = false;
+    }
+}
+
+function copyDocsOutput() {
+    const outputPre = document.getElementById('docs-test-output');
+    if (!outputPre || !outputPre.textContent) return;
+    navigator.clipboard.writeText(outputPre.textContent).then(() => {
+        showToast('✓ JSON copiado al portapapeles');
+    }).catch(() => {
+        showToast('Error al copiar JSON');
+    });
+}
+
+function switchSnippetTab(tabKey) {
+    document.querySelectorAll('.snippet-tab-btn').forEach(btn => {
+        btn.classList.remove('active', 'bg-indigo-100', 'dark:bg-indigo-950/50', 'text-indigo-700', 'dark:text-indigo-300');
+        btn.classList.add('text-slate-600', 'dark:text-slate-400');
+    });
+
+    const activeBtn = document.getElementById(`tab-btn-${tabKey}`);
+    if (activeBtn) {
+        activeBtn.classList.add('active', 'bg-indigo-100', 'dark:bg-indigo-950/50', 'text-indigo-700', 'dark:text-indigo-300');
+        activeBtn.classList.remove('text-slate-600', 'dark:text-slate-400');
+    }
+
+    document.querySelectorAll('.snippet-content').forEach(el => el.classList.add('hidden'));
+    const targetContent = document.getElementById(`snippet-${tabKey}`);
+    if (targetContent) targetContent.classList.remove('hidden');
+}
+
+function copySnippet(containerId) {
+    const wrap = document.getElementById(containerId);
+    if (!wrap) return;
+    const codeEl = wrap.querySelector('code') || wrap.querySelector('pre');
+    const textToCopy = codeEl ? codeEl.innerText : wrap.innerText;
+    navigator.clipboard.writeText(textToCopy).then(() => {
+        showToast('✓ Código copiado al portapapeles');
+    }).catch(() => {
+        showToast('Error al copiar código');
+    });
+}
+
+window.runDocsApiTest = runDocsApiTest;
+window.copyDocsOutput = copyDocsOutput;
+window.switchSnippetTab = switchSnippetTab;
+window.copySnippet = copySnippet;
+

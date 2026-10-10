@@ -32,6 +32,9 @@ function markDirty() {
   _searchIndexDirty = true;
   _searchResultCache.clear();
   _taskTitleMapCache = null;
+  if (typeof scheduleAutoSync === 'function' && _cloudAutoSyncEnabled) {
+    scheduleAutoSync();
+  }
 }
 
 async function getCloudHeaders(extra = {}) {
@@ -190,9 +193,18 @@ function rebuildProjectSelect(preserveValue) {
 
 function updateDateLabel() {
   const d = new Date();
-  const date = d.toLocaleDateString('es-ES', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  const time = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  document.getElementById('date-label').textContent = date + ' · ' + time;
+  const days = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
+  const months = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+  const dateEl = document.getElementById('date-label');
+  if (dateEl) {
+    dateEl.textContent = `${days[d.getDay()]}, ${d.getDate()} DE ${months[d.getMonth()]} DE ${d.getFullYear()}`;
+  }
+  const clockEl = document.getElementById('header-clock');
+  if (clockEl) {
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    clockEl.textContent = `${hh}:${mm}`;
+  }
 }
 updateDateLabel();
 
@@ -659,9 +671,9 @@ async function deleteTask(id) {
 }
 
 function getPriLabel(p) {
-  if (p === 'high') return '<span class="priority-badge priority-high">Alta</span>';
-  if (p === 'mid')  return '<span class="priority-badge priority-mid">Media</span>';
-  return '<span class="priority-badge priority-low">Baja</span>';
+  if (p === 'high') return '<span class="priority-badge priority-high"><span class="pri-indicator pri-indicator-high"></span>Alta</span>';
+  if (p === 'mid')  return '<span class="priority-badge priority-mid"><span class="pri-indicator pri-indicator-mid"></span>Media</span>';
+  return '<span class="priority-badge priority-low"><span class="pri-indicator pri-indicator-low"></span>Baja</span>';
 }
 
 function getDueBadge(t) {
@@ -787,7 +799,7 @@ function searchTasksGlobal(query) {
 }
 
 function priorityTasks() {
-  if (priFilter === 'all') return tasks.filter(t => !t.parentId);
+  if (priFilter === 'all' || priFilter === 'suggestions') return tasks.filter(t => !t.parentId);
   return tasks.filter(t => !t.parentId && t.pri === priFilter);
 }
 
@@ -846,6 +858,408 @@ function sortTasks(arr) {
   });
 }
 
+// ── Motor Heurístico de Análisis de Tareas y Sugerencias ──
+function _safeEscSuggest(str) {
+  if (typeof escHtml === 'function') return escHtml(str);
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function getSuggestionsAnalysis() {
+  const pendingTop = tasks.filter(t => !t.done && !t.parentId);
+  const doneTop = tasks.filter(t => t.done && !t.parentId);
+  const totalTop = pendingTop.length + doneTop.length;
+  const overdueTasks = pendingTop.filter(t => isTaskOverdue(t));
+  const todayStr = todayISO();
+  const todayPending = pendingTop.filter(t => isTaskScheduledForDate(t, todayStr));
+
+  const suggestions = [];
+
+  // 1. Bucle de aplazamiento (pospuestas >= 2 veces o postergadas >= 3 días desde origDue)
+  pendingTop.forEach(t => {
+    const snoozedCount = Array.isArray(t.snoozedDates) ? t.snoozedDates.length : 0;
+    const diffDays = (t.origDue && t.due) ? Math.round((new Date(t.due) - new Date(t.origDue)) / 86400000) : 0;
+    if (snoozedCount >= 2 || diffDays >= 3) {
+      const timesLabel = snoozedCount >= 2 ? `${snoozedCount} veces` : `${diffDays} días`;
+      suggestions.push({
+        id: `snooze-${t.id}`,
+        type: 'snooze',
+        tagClass: 'snooze',
+        icon: '🔁',
+        typeLabel: 'Bucle de aplazamiento',
+        taskId: t.id,
+        taskTitle: t.text || 'Sin título',
+        taskPri: t.pri || 'mid',
+        reasonHtml: `Esta tarea ha sido aplazada <strong>${timesLabel}</strong> sin progresar. Conviene fragmentarla en subtareas o reprogramarla para una fecha en la que realmente dispongas de tiempo.`,
+        actions: [
+          { action: 'open-detail', label: 'Dividir en subtareas', primary: true, taskId: t.id },
+          { action: 'reschedule-week', label: 'Reprogramar +7d', primary: false, taskId: t.id },
+          ...(t.pri === 'high' ? [{ action: 'lower-priority', label: 'Bajar a Media', primary: false, taskId: t.id }] : [])
+        ]
+      });
+    }
+  });
+
+  // 2. Vencidas crónicas (vencidas hace más de 2 días)
+  const twoDaysAgo = addDays(todayStr, -2);
+  pendingTop.forEach(t => {
+    if (isTaskOverdue(t) && t.due && t.due <= twoDaysAgo) {
+      if (suggestions.some(s => s.taskId === t.id && s.type === 'snooze')) return;
+      suggestions.push({
+        id: `overdue-${t.id}`,
+        type: 'overdue',
+        tagClass: 'overdue',
+        icon: '⚠️',
+        typeLabel: 'Vencida crónica',
+        taskId: t.id,
+        taskTitle: t.text || 'Sin título',
+        taskPri: t.pri || 'mid',
+        reasonHtml: `Lleva vencida desde el <strong>${formatDateNice(t.due)}</strong>. Dejar tareas vencidas acumuladas satura tu panel y desgasta la atención mental.`,
+        actions: [
+          { action: 'reschedule-today', label: 'Mover a hoy', primary: true, taskId: t.id },
+          { action: 'clear-due', label: 'Pasar a "Sin fecha"', primary: false, taskId: t.id },
+          { action: 'complete-task', label: 'Completar ahora', primary: false, taskId: t.id }
+        ]
+      });
+    }
+  });
+
+  // 3. Victorias rápidas (subtareas con 66%+ de avance o solo 1 subtarea pendiente)
+  pendingTop.forEach(t => {
+    const subs = tasks.filter(s => s.parentId === t.id);
+    if (!subs.length) return;
+    const subsDone = subs.filter(s => s.done).length;
+    const remaining = subs.length - subsDone;
+    if (remaining > 0 && subsDone > 0 && (remaining === 1 || subsDone / subs.length >= 0.66)) {
+      const pct = Math.round(subsDone / subs.length * 100);
+      suggestions.push({
+        id: `quickwin-${t.id}`,
+        type: 'quickwin',
+        tagClass: 'quickwin',
+        icon: '🚀',
+        typeLabel: 'Victoria rápida',
+        taskId: t.id,
+        taskTitle: t.text || 'Sin título',
+        taskPri: t.pri || 'mid',
+        reasonHtml: `¡Casi terminada! Tiene <strong>${subsDone} de ${subs.length} subtareas completadas</strong> (${pct}%). Finalizar el tramo restante libera carga mental de inmediato.`,
+        actions: [
+          { action: 'open-detail', label: 'Ver última subtarea', primary: true, taskId: t.id },
+          { action: 'complete-task', label: 'Cerrar tarea padre', primary: false, taskId: t.id }
+        ]
+      });
+    }
+  });
+
+  // 4. Fricción monolítica (descripción extensa o título largo sin ninguna subtarea)
+  pendingTop.forEach(t => {
+    const subs = tasks.filter(s => s.parentId === t.id);
+    if (subs.length > 0) return;
+    const descLen = (t.desc || '').trim().length;
+    const titleLen = (t.text || '').trim().length;
+    if (descLen >= 80 || titleLen >= 60) {
+      if (suggestions.some(s => s.taskId === t.id)) return;
+      suggestions.push({
+        id: `monolith-${t.id}`,
+        type: 'monolith',
+        tagClass: 'monolith',
+        icon: '🧩',
+        typeLabel: 'Fricción monolítica',
+        taskId: t.id,
+        taskTitle: t.text || 'Sin título',
+        taskPri: t.pri || 'mid',
+        reasonHtml: `Contiene notas extensas o alcance complejo pero no tiene subtareas definidas. Desglosarla en pasos accionables reduce la resistencia cognitiva.`,
+        actions: [
+          { action: 'open-detail', label: 'Añadir subtareas', primary: true, taskId: t.id }
+        ]
+      });
+    }
+  });
+
+  // 5. Inflación de prioridad (más del 60% de pendientes en Alta con al menos 4 tareas)
+  if (pendingTop.length >= 4) {
+    const highTasks = pendingTop.filter(t => t.pri === 'high');
+    const ratio = highTasks.length / pendingTop.length;
+    if (ratio >= 0.60) {
+      const pct = Math.round(ratio * 100);
+      suggestions.push({
+        id: 'priority-inflation',
+        type: 'priority',
+        tagClass: 'priority',
+        icon: '⚡',
+        typeLabel: 'Falsa urgencia',
+        taskId: null,
+        taskTitle: `Inflación de prioridad (${highTasks.length} de ${pendingTop.length} tareas en Alta)`,
+        taskPri: 'high',
+        reasonHtml: `El <strong>${pct}%</strong> de tus tareas pendientes están en prioridad Alta. Cuando todo es prioritario se pierde el foco estratégico. Conviene rebalancear tareas no críticas a Media.`,
+        actions: [
+          { action: 'rebalance-high', label: 'Rebalancear excedente a Media', primary: true, taskId: null }
+        ]
+      });
+    }
+  }
+
+  // 6. Sobrecarga de la jornada (más de 6 tareas pendientes para hoy o >= 4 altas)
+  if (todayPending.length >= 6 || todayPending.filter(t => t.pri === 'high').length >= 4) {
+    suggestions.push({
+      id: 'daily-overload',
+      type: 'overload',
+      tagClass: 'overload',
+      icon: '📅',
+      typeLabel: 'Sobrecarga de jornada',
+      taskId: null,
+      taskTitle: `Jornada saturada (${todayPending.length} tareas programadas para hoy)`,
+      taskPri: 'high',
+      reasonHtml: `Tienes <strong>${todayPending.length} tareas activas hoy</strong>. Una jornada sobrecargada suele derivar en frustración y aplazamientos. Mover las tareas secundarias a mañana optimizará tu enfoque.`,
+      actions: [
+        { action: 'defer-secondary-tomorrow', label: 'Diferir secundarias a mañana', primary: true, taskId: null }
+      ]
+    });
+  }
+
+  // ── Salud del Flujo (Health Score 0-100) ──
+  let healthScore = 100;
+  if (pendingTop.length > 0) {
+    const chronicSnoozes = suggestions.filter(s => s.type === 'snooze').length;
+    const chronicOverdues = suggestions.filter(s => s.type === 'overdue').length;
+    const monoliths = suggestions.filter(s => s.type === 'monolith').length;
+    const hasInflation = suggestions.some(s => s.type === 'priority');
+    const hasOverload = suggestions.some(s => s.type === 'overload');
+    const quickWins = suggestions.filter(s => s.type === 'quickwin').length;
+
+    healthScore -= Math.min(chronicOverdues * 8, 32);
+    healthScore -= Math.min(chronicSnoozes * 6, 24);
+    healthScore -= Math.min(monoliths * 4, 16);
+    if (hasInflation) healthScore -= 12;
+    if (hasOverload) healthScore -= 12;
+    healthScore += Math.min(quickWins * 4, 8);
+
+    healthScore = Math.max(15, Math.min(100, Math.round(healthScore)));
+  }
+
+  let healthGrade = 'Excelente';
+  if (healthScore < 50) healthGrade = 'Crítico';
+  else if (healthScore < 70) healthGrade = 'Atención';
+  else if (healthScore < 85) healthGrade = 'Bueno';
+
+  const completionRate = totalTop ? Math.round(doneTop.length / totalTop * 100) : 100;
+
+  return {
+    healthScore,
+    healthGrade,
+    pendingCount: pendingTop.length,
+    overdueCount: overdueTasks.length,
+    completionRate,
+    suggestions
+  };
+}
+
+async function handleSuggestionAction(action, taskId) {
+  if (action === 'open-detail' && taskId) {
+    openTaskDetail(Number(taskId));
+    return;
+  }
+  if (action === 'complete-task' && taskId) {
+    await toggleDone(Number(taskId));
+    return;
+  }
+  if (action === 'reschedule-today' && taskId) {
+    const t = tasks.find(x => x.id === Number(taskId));
+    if (t) {
+      t.due = todayISO();
+      await dbPut(t);
+      markDirty();
+      render();
+      showToast('📅 Tarea reprogramada para hoy');
+    }
+    return;
+  }
+  if (action === 'reschedule-week' && taskId) {
+    const t = tasks.find(x => x.id === Number(taskId));
+    if (t) {
+      t.due = addDays(todayISO(), 7);
+      await dbPut(t);
+      markDirty();
+      render();
+      showToast('📅 Reprogramada con 7 días adicionales');
+    }
+    return;
+  }
+  if (action === 'clear-due' && taskId) {
+    const t = tasks.find(x => x.id === Number(taskId));
+    if (t) {
+      t.due = '';
+      t.dueTime = '';
+      await dbPut(t);
+      markDirty();
+      render();
+      showToast('🗓️ Tarea movida a "Sin fecha"');
+    }
+    return;
+  }
+  if (action === 'lower-priority' && taskId) {
+    const t = tasks.find(x => x.id === Number(taskId));
+    if (t) {
+      t.pri = 'mid';
+      await dbPut(t);
+      markDirty();
+      render();
+      showToast('⚡ Prioridad ajustada a Media');
+    }
+    return;
+  }
+  if (action === 'rebalance-high') {
+    const todayStr = todayISO();
+    const targets = tasks.filter(t => !t.done && !t.parentId && t.pri === 'high' && t.due !== todayStr);
+    const toUpdate = targets.length ? targets : tasks.filter(t => !t.done && !t.parentId && t.pri === 'high').slice(2);
+    if (!toUpdate.length) {
+      showToast('No hay tareas excedentes para rebalancear');
+      return;
+    }
+    for (const t of toUpdate) {
+      t.pri = 'mid';
+      await dbPut(t);
+    }
+    markDirty();
+    render();
+    showToast(`⚡ Se rebalancearon ${toUpdate.length} tareas a prioridad Media`);
+    return;
+  }
+  if (action === 'defer-secondary-tomorrow') {
+    const todayStr = todayISO();
+    const targets = tasks.filter(t => !t.done && !t.parentId && isTaskScheduledForDate(t, todayStr) && t.pri !== 'high');
+    const toDefer = targets.length ? targets : tasks.filter(t => !t.done && !t.parentId && isTaskScheduledForDate(t, todayStr)).slice(3);
+    if (!toDefer.length) {
+      showToast('No hay tareas secundarias para diferir');
+      return;
+    }
+    const tomorrowStr = addDays(todayStr, 1);
+    for (const t of toDefer) {
+      t.due = tomorrowStr;
+      await dbPut(t);
+    }
+    markDirty();
+    render();
+    showToast(`📅 Se difirieron ${toDefer.length} tareas para mañana`);
+    return;
+  }
+}
+
+function renderSuggestionsView(container) {
+  const analysis = getSuggestionsAnalysis();
+  const { healthScore, healthGrade, pendingCount, overdueCount, completionRate, suggestions } = analysis;
+
+  const cardsHtml = suggestions.map(s => {
+    const priColor = s.taskPri === 'high' ? 'red' : s.taskPri === 'mid' ? 'amber' : 'green';
+    const priLabel = s.taskPri === 'high' ? 'Alta' : s.taskPri === 'mid' ? 'Media' : 'Baja';
+    const clickAttr = s.taskId ? `onclick="openTaskDetail(${s.taskId})" role="button" tabindex="0"` : '';
+    const safeTitle = _safeEscSuggest(s.taskTitle);
+
+    const actionsHtml = s.actions.map(a => `
+      <button type="button" class="btn-suggestion-action ${a.primary ? 'primary' : ''}" data-action="${a.action}" ${a.taskId ? `data-task-id="${a.taskId}"` : ''}>
+        ${a.label}
+      </button>
+    `).join('');
+
+    return `
+      <div class="suggestion-card" data-suggestion-id="${s.id}">
+        <div class="suggestion-card-top">
+          <span class="suggestion-tag suggestion-tag-${s.tagClass}">${s.icon} ${s.typeLabel}</span>
+          ${s.taskPri ? `<span class="priority-badge priority-${s.taskPri}">${priLabel}</span>` : ''}
+        </div>
+        <div class="suggestion-card-body">
+          <div class="suggestion-task-title" ${clickAttr}>
+            ${s.taskPri ? `<span class="suggestion-task-pri-dot" style="background:var(--${priColor})"></span>` : ''}
+            <span>${safeTitle}</span>
+          </div>
+          <div class="suggestion-reason">${s.reasonHtml}</div>
+        </div>
+        <div class="suggestion-actions">
+          ${actionsHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="suggestions-view">
+      <div class="suggestions-health-card">
+        <div class="suggestions-health-top">
+          <div class="suggestions-health-info">
+            <div class="suggestions-health-title-row">
+              <h3 class="suggestions-health-title">Salud del Flujo de Trabajo</h3>
+              <span class="suggestions-health-spark">✦</span>
+            </div>
+            <span class="suggestions-health-subtitle">DIAGNÓSTICO HEURÍSTICO EN TIEMPO REAL</span>
+          </div>
+          <div class="suggestions-score-badge">
+            <span class="suggestions-score-value">${healthScore}%</span>
+            <span class="suggestions-score-label">${healthGrade}</span>
+          </div>
+        </div>
+        <div class="suggestions-metrics-grid">
+          <div class="suggestions-metric-pill">
+            <span class="suggestions-metric-icon">⚡</span>
+            <div class="suggestions-metric-data">
+              <span class="suggestions-metric-num">${suggestions.length}</span>
+              <span class="suggestions-metric-name">Sugerencias</span>
+            </div>
+          </div>
+          <div class="suggestions-metric-pill">
+            <span class="suggestions-metric-icon">📋</span>
+            <div class="suggestions-metric-data">
+              <span class="suggestions-metric-num">${pendingCount}</span>
+              <span class="suggestions-metric-name">Pendientes</span>
+            </div>
+          </div>
+          <div class="suggestions-metric-pill">
+            <span class="suggestions-metric-icon">⏳</span>
+            <div class="suggestions-metric-data">
+              <span class="suggestions-metric-num">${overdueCount}</span>
+              <span class="suggestions-metric-name">Vencidas</span>
+            </div>
+          </div>
+          <div class="suggestions-metric-pill">
+            <span class="suggestions-metric-icon">🎯</span>
+            <div class="suggestions-metric-data">
+              <span class="suggestions-metric-num">${completionRate}%</span>
+              <span class="suggestions-metric-name">Tasa Cierre</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${suggestions.length === 0 ? `
+        <div class="suggestions-optimal-state">
+          <div class="suggestions-optimal-icon">✦</div>
+          <h3 class="suggestions-optimal-title">Flujo de trabajo optimizado</h3>
+          <p class="suggestions-optimal-desc">No se detectaron cuellos de botella, bucles de postergación ni sobrecarga de tareas. Tu sistema se encuentra en un estado de ejecución balanceado.</p>
+          <div class="suggestions-optimal-tip">Mantén este ritmo de ejecución continua</div>
+        </div>
+      ` : `
+        <div class="suggestions-list-section">
+          <div class="suggestions-section-header">
+            <h4 class="suggestions-section-heading">Áreas de optimización</h4>
+            <span class="suggestions-count-chip">${suggestions.length} recomendadas</span>
+          </div>
+          <div class="suggestions-cards-wrap">
+            ${cardsHtml}
+          </div>
+        </div>
+      `}
+    </div>
+  `;
+
+  // Asignar listeners a los botones de acción
+  const actionBtns = container.querySelectorAll('.btn-suggestion-action');
+  actionBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      const tId = btn.dataset.taskId ? Number(btn.dataset.taskId) : null;
+      handleSuggestionAction(action, tId);
+    });
+  });
+}
+
 function render() {
   const list = document.getElementById('task-list');
   const searchActive = !!searchQuery.trim();
@@ -882,68 +1296,104 @@ function render() {
   const allDoneNoOverdue = tTotal > 0 && tDone === tTotal && tOverdue === 0;
   const pct = tTotal ? (allDoneNoOverdue ? 100 : Math.min(Math.round(tDone/tTotal*100), 99)) : 0;
 
-  const circ = 163;
+  const circ = 100;
   const ringFill = document.getElementById('ring-fill');
   const ringPct  = document.getElementById('ring-pct');
   const ringTip  = document.getElementById('ring-tip');
-  const ringWrap = ringFill.closest('.progress-ring');
+  const ringFraction = document.getElementById('ring-fraction');
+  const ringWrap = ringFill ? ringFill.closest('.progress-ring') : null;
+
+  // Actualizar contadores de las píldoras segmentadas de prioridad
+  const cTodas = document.getElementById('countTodas');
+  const cSugerencias = document.getElementById('countSugerencias');
+  const cAlta  = document.getElementById('countAlta');
+  const cMedia = document.getElementById('countMedia');
+  const cBaja  = document.getElementById('countBaja');
+  if (cTodas) cTodas.textContent = scoped.length;
+  if (cSugerencias) {
+    const analysis = getSuggestionsAnalysis();
+    cSugerencias.textContent = analysis.suggestions.length;
+  }
+  if (cAlta)  cAlta.textContent  = scoped.filter(t => t.pri === 'high').length;
+  if (cMedia) cMedia.textContent = scoped.filter(t => t.pri === 'mid').length;
+  if (cBaja)  cBaja.textContent  = scoped.filter(t => t.pri === 'low').length;
 
   if (isToday) {
-    ringWrap.classList.remove('ring-disabled');
-    ringPct.textContent = pct + '%';
-    ringTip.innerHTML =
-      `<div class="ring-tip-row"><span>Total</span><span>${tTotal}</span></div>` +
-      `<div class="ring-tip-row"><span>Pendientes</span><span>${tTotal - tDone}</span></div>` +
-      `<div class="ring-tip-row"><span>Completadas</span><span>${tDone}</span></div>` +
-      `<div class="ring-tip-row ${tOverdue ? 'overdue' : ''}"><span>Vencidas</span><span>${tOverdue}</span></div>` +
-      `<div class="ring-tip-row ring-tip-row-snoozed"><span>Pospuestas hoy</span><span>${snoozedTodayTasks.length}</span></div>` +
-      (snoozedTodayTasks.length
-        ? `<div class="ring-tip-note">${snoozedPreview}${snoozedMore}</div>`
-        : '');
-    const tPct = pct / 100;
-    const ringColor = lerpColor(139,94,16, 26,92,26, tPct);
-    ringFill.style.strokeDashoffset = circ - (circ * pct / 100);
-    ringFill.style.stroke = ringColor;
-    ringPct.style.color = ringColor;
+    if (ringWrap) ringWrap.classList.remove('ring-disabled');
+    if (ringPct) ringPct.textContent = pct + '%';
+    if (ringFraction) ringFraction.textContent = `${tDone} de ${tTotal}`;
+    if (ringTip) {
+      ringTip.innerHTML =
+        `<div class="ring-tip-row"><span>Total</span><span>${tTotal}</span></div>` +
+        `<div class="ring-tip-row"><span>Pendientes</span><span>${tTotal - tDone}</span></div>` +
+        `<div class="ring-tip-row"><span>Completadas</span><span>${tDone}</span></div>` +
+        `<div class="ring-tip-row ${tOverdue ? 'overdue' : ''}"><span>Vencidas</span><span>${tOverdue}</span></div>` +
+        `<div class="ring-tip-row ring-tip-row-snoozed"><span>Pospuestas hoy</span><span>${snoozedTodayTasks.length}</span></div>` +
+        (snoozedTodayTasks.length
+          ? `<div class="ring-tip-note">${snoozedPreview}${snoozedMore}</div>`
+          : '');
+    }
+    if (ringFill) {
+      ringFill.style.strokeDashoffset = circ - (circ * pct / 100);
+      ringFill.style.stroke = 'var(--green)';
+    }
+    if (ringPct) ringPct.style.color = 'var(--text)';
   } else {
-    ringWrap.classList.add('ring-disabled');
-    ringPct.textContent = '—';
-    ringTip.innerHTML = `<div class="ring-tip-row"><span>Solo disponible en "Hoy"</span></div>`;
-    ringFill.style.strokeDashoffset = circ;
-    ringFill.style.stroke = 'var(--border2)';
-    ringPct.style.color = 'var(--text3)';
+    if (ringWrap) ringWrap.classList.remove('ring-disabled');
+    const sTotalCount = scoped.length;
+    const sDoneCount  = scoped.filter(t => t.done).length;
+    const scopedPct   = sTotalCount ? Math.round(sDoneCount / sTotalCount * 100) : 0;
+    if (ringPct) ringPct.textContent = scopedPct + '%';
+    if (ringFraction) ringFraction.textContent = `${sDoneCount} de ${sTotalCount}`;
+    if (ringTip) {
+      ringTip.innerHTML = `<div class="ring-tip-row"><span>Alcance activo</span><span>${sDoneCount} de ${sTotalCount}</span></div>`;
+    }
+    if (ringFill) {
+      ringFill.style.strokeDashoffset = circ - (circ * scopedPct / 100);
+      ringFill.style.stroke = 'var(--green)';
+    }
+    if (ringPct) ringPct.style.color = 'var(--text)';
   }
 
   // ── Etiqueta de lista: basada en datos del scope activo ──
   const sTotal   = scoped.length;
   const sDone    = scoped.filter(t => t.done).length;
   const sOverdue = scoped.filter(t => isTaskOverdue(t)).length;
-  const scopeLabel  = { today: 'hoy', tomorrow: 'mañana', dayafter: 'pasadomañana', week: 'esta semana', month: 'este mes', nodate: 'sin fecha', all: '' };
-  const scopeSuffix = scopeLabel[dateScope] ? ` · ${scopeLabel[dateScope]}` : '';
-  const labelMap = {
-    all:      `tareas${scopeSuffix} · ${sTotal}`,
-    pending:  `pendientes${scopeSuffix} · ${sTotal - sDone}`,
-    done:     `completadas${scopeSuffix} · ${sDone}`,
-    overdue:  `vencidas${scopeSuffix} · ${sOverdue}`,
-    personal: `personal${scopeSuffix}`,
-    trabajo:  `trabajo${scopeSuffix}`,
-    salud:    `salud${scopeSuffix}`,
-  };
-  document.getElementById('list-label').textContent = searchActive
-    ? `— búsqueda global · ${searchTotal}`
-    : ('— ' + (labelMap[filterMode] || 'tareas'));
+  const scopeLabel  = { today: 'hoy', tomorrow: 'mañana', dayafter: 'pasadomañana', week: 'esta semana', month: 'este mes', nodate: 'sin fecha', all: 'todas' };
+  const scopeText   = (scopeLabel[dateScope] || 'hoy').toUpperCase();
+
+  const listLabelEl = document.getElementById('list-label');
+  if (listLabelEl) {
+    if (searchActive) {
+      listLabelEl.textContent = `— BÚSQUEDA · ${searchTotal}`;
+    } else if (priFilter === 'suggestions') {
+      listLabelEl.textContent = '— SUGERENCIAS · DIAGNÓSTICO';
+    } else {
+      listLabelEl.textContent = `— TAREAS · ${scopeText} · ${visible.length}`;
+    }
+  }
+
+  if (!searchActive && priFilter === 'suggestions') {
+    renderSuggestionsView(list);
+    return;
+  }
 
   if (!visible.length) {
     list.innerHTML = searchActive
       ? `<div class="empty">
-          <div class="empty-icon">⌕</div>
+          <div class="empty-icon-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          </div>
           <h3>Sin coincidencias</h3>
           <p>No encontré tareas para "${escHtml(searchQuery)}"</p>
         </div>`
       : `<div class="empty">
-          <div class="empty-icon">✦</div>
+          <div class="empty-icon-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.4h7.6l-6.2 4.5 2.4 7.4-6.2-4.5-6.2 4.5 2.4-7.4-6.2-4.5h7.6z"/></svg>
+          </div>
           <h3>Sin tareas aquí</h3>
-          <p>Agrega una nueva tarea o cambia el filtro</p>
+          <p>Agrega una nueva tarea o cambia el filtro de vista</p>
+          <button type="button" class="empty-cta-btn" onclick="openNewTaskModal()">+ Crear tarea</button>
         </div>`;
     return;
   }
@@ -1020,10 +1470,10 @@ function renderTaskItem(t) {
   const catTag = primaryCat
     ? `<span class="tag"><span class="tag-dot" style="background:${primaryCat.color}"></span>${primaryCat.label}${extraCount > 0 ? `<span class="tag-extra">+${extraCount}</span>` : ''}</span>`
     : '';
-  const priColor = t.pri === 'high' ? '#8b1a1a' : t.pri === 'mid' ? '#7a6a00' : '#1a5c1a';
-  return `<div class="task-item ${t.done?'done':''} ${overdueClass}" style="--cat-color:${primaryCat ? primaryCat.color : 'var(--border2)'};--pri-color:${priColor}" data-id="${t.id}">
+  const checkSvg = t.done ? '<svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : '';
+  return `<div class="task-item ${t.done?'done':''} ${overdueClass}" data-id="${t.id}">
       <div class="task-row-top">
-        <div class="task-check ${t.done?'checked':''}" onclick="toggleDone(${t.id})" title="${t.done?'Reabrir':'Completar'}"></div>
+        <div class="task-check ${t.done?'checked':''}" onclick="toggleDone(${t.id})" title="${t.done?'Reabrir':'Completar'}">${checkSvg}</div>
         <div class="task-body" onclick="openTaskDetail(${t.id})" style="cursor:pointer">
           <div class="task-text md-content">${renderMd(t.text)}</div>
           ${t.desc ? `<div class="task-desc md-content">${renderMd(t.desc)}</div>` : ''}
@@ -1091,16 +1541,15 @@ function updateDayRing() {
   const now = new Date();
   const secondsElapsed = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
   const pct = Math.round(secondsElapsed / 864);
-  const t = pct / 100;
-  const circ = 163;
-  // 0% → neutral sepia · 100% → rojo
-  const color = lerpColor(100,80,50, 139,26,26, t);
+  const circ = 100;
   const fill = document.getElementById('day-fill');
   const label = document.getElementById('day-pct');
-  fill.style.strokeDashoffset = circ - (circ * pct / 100);
-  fill.style.stroke = color;
-  label.style.color = color;
-  document.getElementById('day-pct').textContent = pct + '%';
+  if (fill && label) {
+    fill.style.strokeDashoffset = circ - (circ * pct / 100);
+    fill.style.stroke = 'var(--text2)';
+    label.style.color = 'var(--text)';
+    label.textContent = pct + '%';
+  }
 }
 
 function scheduleMinuteTick() {
@@ -1115,7 +1564,17 @@ function scheduleMinuteTick() {
   }, msToNextMinute);
 }
 
-const PRIORITY_ORDER = ['high', 'mid', 'low', 'all'];
+let _suppressClickUntil = 0;
+// Interceptor en fase de captura para evitar que swipes se confundan con clics en tareas o botones
+document.addEventListener('click', e => {
+  if (Date.now() < _suppressClickUntil) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }
+}, true);
+
+const PRIORITY_ORDER = ['suggestions', 'high', 'mid', 'low'];
 
 function setPriorityFilter(nextPri, swipeDelta = 0) {
   if (!PRIORITY_ORDER.includes(nextPri)) return;
@@ -1133,6 +1592,14 @@ function setPriorityFilter(nextPri, swipeDelta = 0) {
     void priTabs.offsetWidth;
     priTabs.classList.add(swipeDelta < 0 ? 'pri-swipe-left' : 'pri-swipe-right');
     setTimeout(() => priTabs.classList.remove('pri-swipe-left', 'pri-swipe-right'), 260);
+  }
+
+  const taskMount = document.getElementById('task-mount');
+  if (taskMount && swipeDelta) {
+    taskMount.classList.remove('task-mount-swipe-left', 'task-mount-swipe-right');
+    void taskMount.offsetWidth;
+    taskMount.classList.add(swipeDelta < 0 ? 'task-mount-swipe-left' : 'task-mount-swipe-right');
+    setTimeout(() => taskMount.classList.remove('task-mount-swipe-left', 'task-mount-swipe-right'), 250);
   }
 
   render();
@@ -1155,29 +1622,9 @@ function isOverlayBlockingPrioritySwipe() {
     '.history-overlay.open',
     '.docs-overlay.open',
     '.day-progress-overlay.open',
-    '.snooze-detail-overlay.open'
-  ].join(','));
-}
-
-function isInteractivePrioritySwipeTarget(target) {
-  if (!target || !(target instanceof Element)) return true;
-  return !!target.closest([
-    'button',
-    'input',
-    'textarea',
-    'select',
-    'a',
-    '[role="button"]',
-    '.task-item',
-    '.task-actions',
-    '.task-check',
-    '.task-body',
-    '.filters-wrapper',
-    '.scope-wrapper',
-    '.pri-tabs',
-    '.nav-fab-wrap',
-    '.cat-multi-wrap',
-    '.ring-wrap'
+    '.snooze-detail-overlay.open',
+    '#sync-modal[style*="flex"]',
+    '#github-decrypt-backdrop[style*="flex"]'
   ].join(','));
 }
 
@@ -1185,57 +1632,88 @@ function initPrioritySwipe() {
   const appEl = document.querySelector('.app');
   if (!appEl) return;
 
-  let tracking = false;
-  let pointerId = null;
   let startX = 0;
   let startY = 0;
-  let horizontalLocked = false;
+  let startTime = 0;
+  let isTracking = false;
+  let isHorizontalGesture = false;
 
   const reset = () => {
-    if (pointerId !== null && appEl.hasPointerCapture && appEl.hasPointerCapture(pointerId)) {
-      appEl.releasePointerCapture(pointerId);
-    }
-    tracking = false;
-    pointerId = null;
-    horizontalLocked = false;
+    isTracking = false;
+    isHorizontalGesture = false;
   };
 
-  appEl.addEventListener('pointerdown', e => {
-    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
-    if (isOverlayBlockingPrioritySwipe()) return;
-    if (isInteractivePrioritySwipeTarget(e.target)) return;
-    tracking = true;
-    pointerId = e.pointerId;
-    startX = e.clientX;
-    startY = e.clientY;
-    horizontalLocked = false;
-  });
+  appEl.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { reset(); return; }
+    if (isOverlayBlockingPrioritySwipe()) { reset(); return; }
 
-  appEl.addEventListener('pointermove', e => {
-    if (!tracking || e.pointerId !== pointerId) return;
+    const target = e.target;
+    // Solo ignorar si el usuario está interactuando con un campo de texto donde se selecciona texto
+    if (target && target.closest && target.closest('input, textarea, select')) {
+      reset();
+      return;
+    }
 
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    startTime = Date.now();
+    isTracking = true;
+    isHorizontalGesture = false;
+  }, { passive: true });
 
-    if (!horizontalLocked) {
-      if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
-      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
+  appEl.addEventListener('touchmove', e => {
+    if (!isTracking || e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (!isHorizontalGesture) {
+      if (absX < 8 && absY < 8) return;
+      // Si el desplazamiento es predominantemente vertical, permitir scroll nativo
+      if (absY >= absX) {
         reset();
         return;
       }
-      horizontalLocked = true;
-      appEl.setPointerCapture?.(pointerId);
+      // Gesto horizontal predominante
+      if (absX > absY * 1.2 && absX > 10) {
+        isHorizontalGesture = true;
+      }
     }
 
-    if (e.cancelable) e.preventDefault();
-    if (Math.abs(dx) >= 70) {
-      cyclePriorityBySwipe(dx);
-      reset();
+    if (isHorizontalGesture) {
+      if (e.cancelable) e.preventDefault();
     }
   }, { passive: false });
 
-  appEl.addEventListener('pointerup', reset);
-  appEl.addEventListener('pointercancel', reset);
+  appEl.addEventListener('touchend', e => {
+    if (!isTracking) return;
+
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    const elapsed = Date.now() - startTime;
+
+    reset();
+
+    if (isOverlayBlockingPrioritySwipe()) return;
+
+    // Umbrales de detección: swipe normal (>=42px) o flick rápido (>=28px en <280ms)
+    const isStandardSwipe = absX >= 42 && absX > absY * 1.2;
+    const isQuickFlick = absX >= 28 && elapsed < 280 && absX > absY * 1.35;
+
+    if (isStandardSwipe || isQuickFlick) {
+      _suppressClickUntil = Date.now() + 350;
+      cyclePriorityBySwipe(dx);
+    }
+  }, { passive: true });
+
+  appEl.addEventListener('touchcancel', reset, { passive: true });
 }
 
 function triggerSearchRender(immediate = false) {
@@ -1869,7 +2347,11 @@ function renderDetailBody(id) {
       const oldDue = task.due || '';
       const oldDueTime = task.dueTime || '';
       const oldOrigDue = task.origDue || '';
-      const next = addRepeat(task.due || todayISO(), task.dueTime || '', task.repeat);
+      const baseDue = task.origDue || task.due || todayISO();
+      let next = addRepeat(baseDue, task.dueTime || '', task.repeat);
+      while (task.due && next.due <= task.due) {
+        next = addRepeat(next.due, next.dueTime || '', task.repeat);
+      }
       task.due = next.due;
       task.dueTime = next.dueTime || '';
       task.origDue = next.due;
@@ -1949,7 +2431,7 @@ function renderSubtaskItem(t) {
   const subBadge = subCount.length ? `<span class="subtask-badge">☐ ${subCount.filter(s=>s.done).length}/${subCount.length}</span>` : '';
   return `<div class="task-item ${t.done?'done':''} ${overdueClass}" style="--cat-color:${primaryCat ? primaryCat.color : 'var(--border2)'};--pri-color:${priColor}" data-subtask-open="${t.id}">
     <div class="task-row-top">
-      <div class="task-check ${t.done?'checked':''}" data-subtask-toggle="${t.id}" title="${t.done?'Reabrir':'Completar'}"></div>
+      <div class="task-check ${t.done?'checked':''}" data-subtask-toggle="${t.id}" title="${t.done?'Reabrir':'Completar'}">${t.done ? '<svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}</div>
       <div class="task-body" style="cursor:pointer">
         <div class="task-text md-content">${renderMd(t.text)}</div>
         ${t.desc ? `<div class="task-desc md-content">${renderMd(t.desc)}</div>` : ''}
@@ -2007,13 +2489,28 @@ function closeNav() {
   if (bd) bd.remove();
 }
 
+function syncModalPriRadios(val) {
+  const target = val || 'mid';
+  const radio = document.querySelector(`input[name="modal-pri-radio"][value="${target}"]`);
+  if (radio) radio.checked = true;
+  const sel = document.getElementById('sel-pri');
+  if (sel) sel.value = target;
+}
+
 function openForm() {
   initDatePicker();
   initTimePicker();
   formOverlay.classList.toggle('above-detail', detailStack.length > 0);
   formOverlay.classList.add('open');
+  const titleEl = document.querySelector('.form-modal-title');
+  if (titleEl) titleEl.textContent = 'Nueva Tarea';
+  const btnEl = document.getElementById('btn-submit-task') || document.querySelector('.btn-add');
+  if (btnEl) btnEl.textContent = 'Guardar Tarea';
+  syncModalPriRadios('mid');
   setTimeout(() => document.getElementById('new-task').focus(), 200);
 }
+window.openNewTaskModal = openForm;
+
 function closeForm() {
   formOverlay.classList.remove('open', 'above-detail', 'above-projects');
   editingId = null;
@@ -2028,8 +2525,10 @@ function closeForm() {
   setCatSelectValues([]);
   setProjSelectValue('');
   syncRepeatN();
-  document.querySelector('.form-modal-title').textContent = 'Nueva tarea';
-  document.querySelector('.btn-add').textContent = 'Agregar';
+  const titleEl = document.querySelector('.form-modal-title');
+  if (titleEl) titleEl.textContent = 'Nueva Tarea';
+  const btnEl = document.getElementById('btn-submit-task') || document.querySelector('.btn-add');
+  if (btnEl) btnEl.textContent = 'Guardar Tarea';
 }
 
 function editTask(id) {
@@ -2039,7 +2538,7 @@ function editTask(id) {
   document.getElementById('new-task').value = t.text;
   document.getElementById('new-desc').value = t.desc || '';
   setCatSelectValues(getTaskCats(t));
-  document.getElementById('sel-pri').value = t.pri;
+  syncModalPriRadios(t.pri);
   document.getElementById('sel-due').value = t.due || '';
   document.getElementById('sel-time').value = t.dueTime || '';
   setProjSelectValue(t.project || '');
@@ -2062,8 +2561,10 @@ function editTask(id) {
     document.querySelectorAll('#repeat-days-picker .day-btn').forEach(b => b.classList.remove('active'));
   }
   syncRepeatN();
-  document.querySelector('.form-modal-title').textContent = 'Editar tarea';
-  document.querySelector('.btn-add').textContent = 'Guardar';
+  const titleEl = document.querySelector('.form-modal-title');
+  if (titleEl) titleEl.textContent = 'Editar Tarea';
+  const btnEl = document.getElementById('btn-submit-task') || document.querySelector('.btn-add');
+  if (btnEl) btnEl.textContent = 'Guardar Cambios';
   initDatePicker();
   formOverlay.classList.toggle('above-detail', detailStack.length > 0);
   formOverlay.classList.add('open');
@@ -2074,10 +2575,84 @@ fab.addEventListener('click', () => {
   navOpen ? closeNav() : openNav();
 });
 
-// Ítem: Nueva nota → abre el formulario de tarea
-document.getElementById('nav-nueva-nota').addEventListener('click', () => {
-  closeNav();
-  openForm();
+// ── Barra de navegación inferior fija (App móvil) ──
+const bnavNewTask = document.getElementById('bnav-new-task');
+if (bnavNewTask) bnavNewTask.addEventListener('click', openForm);
+
+const bnavProjects = document.getElementById('bnav-projects');
+if (bnavProjects) bnavProjects.addEventListener('click', openProjects);
+
+const bnavStats = document.getElementById('bnav-stats');
+if (bnavStats) bnavStats.addEventListener('click', openStats);
+
+const bnavHistory = document.getElementById('bnav-history');
+if (bnavHistory) bnavHistory.addEventListener('click', openHistory);
+
+// Compatibilidad con referencia previa
+const legacyNavNota = document.getElementById('nav-nueva-nota');
+if (legacyNavNota) {
+  legacyNavNota.addEventListener('click', () => {
+    closeNav();
+    openForm();
+  });
+}
+
+// Botón primario directo de Nueva Tarea en la barra de controles
+const mainNewBtn = document.getElementById('btn-new-task-main');
+if (mainNewBtn) {
+  mainNewBtn.addEventListener('click', openForm);
+}
+
+// Botón de cancelar en el modal
+const formCancelBtn = document.getElementById('form-cancel-btn');
+if (formCancelBtn) {
+  formCancelBtn.addEventListener('click', closeForm);
+}
+
+// Sincronización de radio buttons con el select oculto
+document.addEventListener('change', e => {
+  if (e.target && e.target.name === 'modal-pri-radio') {
+    const sel = document.getElementById('sel-pri');
+    if (sel) sel.value = e.target.value;
+  }
+});
+
+// Alternador de tema en el encabezado
+const headerThemeBtn = document.getElementById('header-theme-toggle');
+if (headerThemeBtn) {
+  headerThemeBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const nextTheme = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', nextTheme);
+    localStorage.setItem('app-theme', nextTheme);
+    localStorage.setItem('app-theme-resolved', nextTheme);
+    showToast(nextTheme === 'dark' ? 'Modo noche activado' : 'Modo día activado');
+  });
+}
+
+// Atajos globales de teclado (ESC y N)
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (formOverlay && formOverlay.classList.contains('open')) {
+      closeForm();
+      return;
+    }
+    const searchInput = document.getElementById('task-search-input');
+    if (searchInput && (document.activeElement === searchInput || searchInput.value)) {
+      searchInput.value = '';
+      searchQuery = '';
+      const clearBtn = document.getElementById('task-search-clear');
+      if (clearBtn) clearBtn.classList.remove('visible');
+      searchInput.blur();
+      render();
+    }
+  }
+  if (e.key.toLowerCase() === 'n' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+    if (!formOverlay || !formOverlay.classList.contains('open')) {
+      e.preventDefault();
+      openForm();
+    }
+  }
 });
 
 // Ítems futuros (placeholder)
@@ -2480,27 +3055,272 @@ async function initSettings() {
   document.getElementById('github-push').addEventListener('click', pushToGithub);
   document.getElementById('github-pull').addEventListener('click', pullFromGithub);
 
+  // Toggle Sincronización Continua Automática
+  const autoSyncToggle = document.getElementById('cloud-autosync-toggle');
+  if (autoSyncToggle) {
+    autoSyncToggle.addEventListener('change', async () => {
+      const isChecked = autoSyncToggle.checked;
+      const pass = sessionStorage.getItem('github_sync_pass');
+      if (isChecked && !pass) {
+        autoSyncToggle.checked = false;
+        showToast('Conecta la sincronización primero con tu contraseña');
+        return;
+      }
+      _cloudAutoSyncEnabled = isChecked;
+      await dbSetMeta('cloudAutoSync', isChecked);
+      updateAutoSyncUIState(isChecked);
+      if (isChecked) {
+        showToast('✓ Sincronización continua en la nube activada');
+        if (_dataDirty) {
+          scheduleAutoSync();
+        }
+      } else {
+        if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+        showToast('Sincronización continua desactivada');
+        const lastSynced = await dbGetMeta('lastBackupTime');
+        if (lastSynced) {
+          const t = new Date(lastSynced);
+          const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+          setCloudStatus('Backup: ' + timeStr, 'ok');
+        }
+      }
+    });
+  }
+
+  // Clic en píldora de nube del header para abrir ajustes
+  const headerCloudSync = document.getElementById('header-cloud-sync');
+  if (headerCloudSync) {
+    headerCloudSync.addEventListener('click', () => {
+      openSettings();
+      const sec = document.getElementById('cloud-autosync-container') || document.getElementById('github-pass-input');
+      if (sec) {
+        setTimeout(() => sec.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
+    });
+  }
+
   // Botones de modal descifrado
   document.getElementById('github-decrypt-submit').addEventListener('click', submitGithubDecrypt);
   document.getElementById('github-decrypt-skip').addEventListener('click', skipGithubDecrypt);
 
-  // ── OpenRouter API Key ──
-  const orInput = document.getElementById('openrouter-key');
-  const orSave  = document.getElementById('openrouter-key-save');
-  dbGetMeta('openRouterKey').then(v => { if (v) { orInput.value = '••••••••'; orInput.dataset.saved = '1'; } });
-  if (orSave) {
-    orSave.addEventListener('click', async () => {
-      const val = orInput.value.trim();
-      if (!val || val === '••••••••') return;
-      await dbSetMeta('openRouterKey', val);
-      orInput.value = '••••••••';
-      orInput.dataset.saved = '1';
-      showToast('✓ Clave de IA guardada');
+  // ── IA Providers Settings (OpenRouter & Google AI Studio) ──
+  const orKeyInput    = document.getElementById('openrouter-key');
+  const orModelInput  = document.getElementById('openrouter-model');
+  const orRevealBtn   = document.getElementById('openrouter-key-reveal');
+  const orCopyBtn     = document.getElementById('openrouter-key-copy');
+  const orSaveBtn     = document.getElementById('openrouter-save-btn');
+  const orStatusMsg   = document.getElementById('openrouter-status-msg');
+
+  const gKeyInput     = document.getElementById('googleai-key');
+  const gModelInput   = document.getElementById('googleai-model');
+  const gRevealBtn    = document.getElementById('googleai-key-reveal');
+  const gCopyBtn      = document.getElementById('googleai-key-copy');
+  const gSaveBtn      = document.getElementById('googleai-save-btn');
+  const gStatusMsg    = document.getElementById('googleai-status-msg');
+
+  const aiPillOpenRouter  = document.getElementById('ai-provider-openrouter-btn');
+  const aiPillGoogleAI    = document.getElementById('ai-provider-googleai-btn');
+  const aiCardOpenRouter  = document.getElementById('ai-card-openrouter');
+  const aiCardGoogleAI    = document.getElementById('ai-card-googleai');
+  const aiBadgeOpenRouter = document.getElementById('ai-badge-openrouter');
+  const aiBadgeGoogleAI   = document.getElementById('ai-badge-googleai');
+
+  function updateAIProviderUI(activeProvider) {
+    const isGoogle = activeProvider === 'googleai';
+    if (aiPillOpenRouter) aiPillOpenRouter.classList.toggle('active', !isGoogle);
+    if (aiPillGoogleAI)   aiPillGoogleAI.classList.toggle('active', isGoogle);
+
+    if (aiCardOpenRouter) aiCardOpenRouter.classList.toggle('active-provider', !isGoogle);
+    if (aiCardGoogleAI)   aiCardGoogleAI.classList.toggle('active-provider', isGoogle);
+
+    if (aiBadgeOpenRouter) aiBadgeOpenRouter.style.display = !isGoogle ? 'inline-block' : 'none';
+    if (aiBadgeGoogleAI)   aiBadgeGoogleAI.style.display = isGoogle ? 'inline-block' : 'none';
+  }
+
+  // Cargar valores iniciales
+  Promise.all([
+    dbGetMeta('openRouterKey'),
+    dbGetMeta('openRouterModel'),
+    dbGetMeta('googleAIKey'),
+    dbGetMeta('googleAIModel'),
+    dbGetMeta('aiProvider')
+  ]).then(([orKey, orModel, gKey, gModel, aiProv]) => {
+    if (orKeyInput && orKey) orKeyInput.value = orKey;
+    if (orModelInput) orModelInput.value = orModel || '';
+    if (gKeyInput && gKey) gKeyInput.value = gKey;
+    if (gModelInput) gModelInput.value = gModel || '';
+    updateAIProviderUI(aiProv || 'openrouter');
+  });
+
+  // Selector de proveedor activo
+  if (aiPillOpenRouter) {
+    aiPillOpenRouter.addEventListener('click', async () => {
+      await dbSetMeta('aiProvider', 'openrouter');
+      updateAIProviderUI('openrouter');
+      showToast('✓ Proveedor activo: OpenRouter');
     });
   }
-  if (orInput) {
-    orInput.addEventListener('focus', () => {
-      if (orInput.dataset.saved === '1') { orInput.value = ''; orInput.dataset.saved = ''; }
+  if (aiPillGoogleAI) {
+    aiPillGoogleAI.addEventListener('click', async () => {
+      await dbSetMeta('aiProvider', 'googleai');
+      updateAIProviderUI('googleai');
+      showToast('✓ Proveedor activo: Google AI Studio');
+    });
+  }
+
+  // Acciones: Revelar claves
+  if (orRevealBtn && orKeyInput) {
+    orRevealBtn.addEventListener('click', () => {
+      toggleFieldVisibility('openrouter-key', orRevealBtn);
+    });
+  }
+  if (gRevealBtn && gKeyInput) {
+    gRevealBtn.addEventListener('click', () => {
+      toggleFieldVisibility('googleai-key', gRevealBtn);
+    });
+  }
+
+  // Acciones: Copiar claves
+  if (orCopyBtn && orKeyInput) {
+    orCopyBtn.addEventListener('click', () => {
+      const val = orKeyInput.value.trim();
+      if (!val) { showToast('No hay clave de OpenRouter para copiar'); return; }
+      navigator.clipboard.writeText(val).then(() => {
+        showToast('✓ Clave de OpenRouter copiada al portapapeles');
+      }).catch(() => showToast('Error al copiar clave'));
+    });
+  }
+  if (gCopyBtn && gKeyInput) {
+    gCopyBtn.addEventListener('click', () => {
+      const val = gKeyInput.value.trim();
+      if (!val) { showToast('No hay clave de Google AI Studio para copiar'); return; }
+      navigator.clipboard.writeText(val).then(() => {
+        showToast('✓ Clave de Google AI Studio copiada al portapapeles');
+      }).catch(() => showToast('Error al copiar clave'));
+    });
+  }
+
+  // Guardar y Validar OpenRouter
+  if (orSaveBtn) {
+    orSaveBtn.addEventListener('click', async () => {
+      const key = orKeyInput ? orKeyInput.value.trim() : '';
+      const model = (orModelInput ? orModelInput.value.trim() : '') || 'mistralai/mistral-small-2603';
+
+      if (!key) {
+        if (orStatusMsg) {
+          orStatusMsg.textContent = 'Ingresa una clave para validar.';
+          orStatusMsg.className = 'ai-status-msg err';
+        }
+        showToast('Ingresa tu API Key de OpenRouter');
+        return;
+      }
+
+      orSaveBtn.disabled = true;
+      if (orStatusMsg) {
+        orStatusMsg.textContent = 'Validando conexión...';
+        orStatusMsg.className = 'ai-status-msg loading';
+      }
+
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${key}`,
+            'HTTP-Referer': window.location.href,
+            'X-Title': 'Daily Planner App',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 5
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          const errDetail = errData?.error?.message || `HTTP ${res.status}`;
+          throw new Error(errDetail);
+        }
+
+        await dbSetMeta('openRouterKey', key);
+        await dbSetMeta('openRouterModel', model);
+
+        if (orStatusMsg) {
+          orStatusMsg.textContent = '✓ Conexión exitosa y guardada';
+          orStatusMsg.className = 'ai-status-msg ok';
+        }
+        showToast('✓ OpenRouter validado y guardado');
+      } catch (err) {
+        console.error('Error validando OpenRouter:', err);
+        if (orStatusMsg) {
+          orStatusMsg.textContent = `✗ ${err.message || 'Error de conexión'}`;
+          orStatusMsg.className = 'ai-status-msg err';
+        }
+        showToast(`✗ Error: ${err.message || 'No se pudo conectar'}`);
+      } finally {
+        orSaveBtn.disabled = false;
+      }
+    });
+  }
+
+  // Guardar y Validar Google AI Studio
+  if (gSaveBtn) {
+    gSaveBtn.addEventListener('click', async () => {
+      const key = gKeyInput ? gKeyInput.value.trim() : '';
+      const modelRaw = (gModelInput ? gModelInput.value.trim() : '') || 'gemini-2.5-flash';
+      const model = modelRaw.startsWith('models/') ? modelRaw.slice(7) : modelRaw;
+
+      if (!key) {
+        if (gStatusMsg) {
+          gStatusMsg.textContent = 'Ingresa una clave para validar.';
+          gStatusMsg.className = 'ai-status-msg err';
+        }
+        showToast('Ingresa tu API Key de Google AI Studio');
+        return;
+      }
+
+      gSaveBtn.disabled = true;
+      if (gStatusMsg) {
+        gStatusMsg.textContent = 'Validando conexión...';
+        gStatusMsg.className = 'ai-status-msg loading';
+      }
+
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'ping' }] }],
+            generationConfig: { maxOutputTokens: 5 }
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          const errDetail = errData?.error?.message || `HTTP ${res.status}`;
+          throw new Error(errDetail);
+        }
+
+        await dbSetMeta('googleAIKey', key);
+        await dbSetMeta('googleAIModel', modelRaw);
+
+        if (gStatusMsg) {
+          gStatusMsg.textContent = '✓ Conexión con Gemini exitosa y guardada';
+          gStatusMsg.className = 'ai-status-msg ok';
+        }
+        showToast('✓ Google AI Studio validado y guardado');
+      } catch (err) {
+        console.error('Error validando Google AI Studio:', err);
+        if (gStatusMsg) {
+          gStatusMsg.textContent = `✗ ${err.message || 'Error de conexión'}`;
+          gStatusMsg.className = 'ai-status-msg err';
+        }
+        showToast(`✗ Error: ${err.message || 'No se pudo conectar'}`);
+      } finally {
+        gSaveBtn.disabled = false;
+      }
     });
   }
 
@@ -2628,6 +3448,25 @@ async function restoreFromPayload(payload) {
     if (payload.meta.openRouterKey) {
       await dbSetMeta('openRouterKey', payload.meta.openRouterKey);
     }
+    if (payload.meta.openRouterModel) {
+      await dbSetMeta('openRouterModel', payload.meta.openRouterModel);
+    }
+    if (payload.meta.googleAIKey) {
+      await dbSetMeta('googleAIKey', payload.meta.googleAIKey);
+    }
+    if (payload.meta.googleAIModel) {
+      await dbSetMeta('googleAIModel', payload.meta.googleAIModel);
+    }
+    if (payload.meta.aiProvider) {
+      await dbSetMeta('aiProvider', payload.meta.aiProvider);
+    }
+    if (payload.meta.cloudAutoSync !== undefined) {
+      await dbSetMeta('cloudAutoSync', !!payload.meta.cloudAutoSync);
+      _cloudAutoSyncEnabled = !!payload.meta.cloudAutoSync;
+      if (typeof updateAutoSyncUIState === 'function') {
+        updateAutoSyncUIState(_cloudAutoSyncEnabled);
+      }
+    }
     if (Array.isArray(payload.meta.makerCategories)) {
       await dbSetMeta('makerCategories', payload.meta.makerCategories);
     }
@@ -2667,16 +3506,28 @@ async function restoreFromPayload(payload) {
   rebuildFilterButtons();
   if (document.getElementById('settings-cats-default')) await renderSettingsCats();
   await render();
-  markDirty();
+  _dataDirty = false;
+  _searchIndexDirty = true;
+  _searchResultCache.clear();
+  _taskTitleMapCache = null;
   return incoming.tasks.length;
 }
 
 // ── Exportar datos ──
 async function exportData() {
   try {
-    const [taskList, catList, projList, histList, orKey, makerCats, savedThemeConfig] = await Promise.all([
+    const [
+      taskList, catList, projList, histList,
+      orKey, orModel, gKey, gModel, aiProv,
+      makerCats, savedThemeConfig,
+      cloudAutoSync
+    ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
-      dbGetMeta('openRouterKey'), dbGetMeta('makerCategories'), dbGetMeta('themeConfig')
+      dbGetMeta('openRouterKey'), dbGetMeta('openRouterModel'),
+      dbGetMeta('googleAIKey'), dbGetMeta('googleAIModel'),
+      dbGetMeta('aiProvider'),
+      dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
+      dbGetMeta('cloudAutoSync')
     ]);
     const payload = {
       version: 1,
@@ -2687,6 +3538,11 @@ async function exportData() {
       history: histList,
       meta: {
         openRouterKey: orKey || null,
+        openRouterModel: orModel || null,
+        googleAIKey: gKey || null,
+        googleAIModel: gModel || null,
+        aiProvider: aiProv || null,
+        cloudAutoSync: cloudAutoSync === true,
         makerCategories: makerCats || [],
         themeConfig: savedThemeConfig || null
       }
@@ -2763,6 +3619,59 @@ async function callSyncAPI(action, password, data = null) {
 
 async function initGithubSync() {
   try {
+    // Cargar preferencia de autoguardado continuo
+    const savedAutoSync = await dbGetMeta('cloudAutoSync');
+    _cloudAutoSyncEnabled = savedAutoSync === true;
+    updateAutoSyncUIState(_cloudAutoSyncEnabled);
+
+    // Escuchar eventos de ciclo de vida del navegador (solo una vez)
+    if (!window._cloudLifecycleWired) {
+      window._cloudLifecycleWired = true;
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden' && _cloudAutoSyncEnabled && _dataDirty) {
+          if (_autoSyncTimer) {
+            clearTimeout(_autoSyncTimer);
+            _autoSyncTimer = null;
+          }
+          runAutoSync();
+        }
+      });
+
+      window.addEventListener('pagehide', () => {
+        if (_cloudAutoSyncEnabled && _dataDirty) {
+          if (_autoSyncTimer) {
+            clearTimeout(_autoSyncTimer);
+            _autoSyncTimer = null;
+          }
+          runAutoSync();
+        }
+      });
+
+      window.addEventListener('online', () => {
+        if (_cloudAutoSyncEnabled && _dataDirty) {
+          showToast('Conexión reestablecida: sincronizando...');
+          runAutoSync();
+        }
+      });
+
+      window.addEventListener('focus', () => {
+        if (_cloudAutoSyncEnabled && !_dataDirty && !_isSyncingCloud && !_syncModalActive) {
+          const pass = sessionStorage.getItem('github_sync_pass');
+          if (pass) verifyCloudVersionSilently(pass);
+        }
+      });
+
+      if (!window._cloudPeriodicTimer) {
+        window._cloudPeriodicTimer = setInterval(() => {
+          if (_cloudAutoSyncEnabled && !_dataDirty && !_isSyncingCloud && !_syncModalActive) {
+            const pass = sessionStorage.getItem('github_sync_pass');
+            if (pass) verifyCloudVersionSilently(pass);
+          }
+        }, 180000);
+      }
+    }
+
     // 1. Verificar si hay sesión en sessionStorage primero
     const sessionPass = sessionStorage.getItem('github_sync_pass');
 
@@ -2924,24 +3833,52 @@ async function saveGithubSettings() {
   }
 }
 
-async function pushToGithub() {
+// ── Estado de Sincronización Continua ──
+let _cloudAutoSyncEnabled = false;
+let _autoSyncTimer = null;
+let _isSyncingCloud = false;
+let _autoSyncPending = false;
+let _autoSyncRetryCount = 0;
+let _autoSyncRetryTimer = null;
+let _syncModalActive = false;
+const AUTO_SYNC_DEBOUNCE_MS = 3500;
+
+/**
+ * Recopila todos los datos de IndexedDB y los sube a la nube.
+ * @param {Object} options
+ * @param {boolean} options.silent - Si es true, no muestra toasts invasivos en cada autoguardado.
+ * @param {boolean} options.isAuto - Indica si la llamada provino del autoguardado continuo.
+ */
+async function executeCloudBackup(options = {}) {
+  const { silent = false, isAuto = false } = options;
   const password = sessionStorage.getItem('github_sync_pass');
   if (!password) {
-    showToast('Inicia sesión ingresando tu contraseña de sincronización.');
-    return;
+    if (!silent) showToast('Inicia sesión ingresando tu contraseña de sincronización.');
+    return false;
   }
 
   const pushBtn = document.getElementById('github-push');
   const originalHTML = pushBtn ? pushBtn.innerHTML : '';
-  if (pushBtn) {
+  if (pushBtn && !silent) {
     pushBtn.disabled = true;
     pushBtn.innerHTML = 'Subiendo respaldo...';
   }
 
+  setCloudStatus('Guardando en la nube...', 'loading');
+
   try {
-    const [taskList, catList, projList, histList, orKey, makerCats, savedThemeConfig] = await Promise.all([
+    const [
+      taskList, catList, projList, histList,
+      orKey, orModel, gKey, gModel, aiProv,
+      makerCats, savedThemeConfig,
+      cloudAutoSync
+    ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
-      dbGetMeta('openRouterKey'), dbGetMeta('makerCategories'), dbGetMeta('themeConfig')
+      dbGetMeta('openRouterKey'), dbGetMeta('openRouterModel'),
+      dbGetMeta('googleAIKey'), dbGetMeta('googleAIModel'),
+      dbGetMeta('aiProvider'),
+      dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
+      dbGetMeta('cloudAutoSync')
     ]);
 
     const backupData = {
@@ -2953,6 +3890,11 @@ async function pushToGithub() {
       history: histList,
       meta: {
         openRouterKey: orKey || null,
+        openRouterModel: orModel || null,
+        googleAIKey: gKey || null,
+        googleAIModel: gModel || null,
+        aiProvider: aiProv || null,
+        cloudAutoSync: cloudAutoSync === true,
         makerCategories: makerCats || [],
         themeConfig: savedThemeConfig || null
       }
@@ -2964,19 +3906,104 @@ async function pushToGithub() {
     _dataDirty = false;
     await dbSetMeta('lastBackupTime', backupData.exported);
     await dbSetMeta('last_backup_sha', res.sha);
-    
+
     const t = new Date();
     const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
-    setCloudStatus('Backup: ' + timeStr, 'ok');
-    showToast('☁ Copia de seguridad subida a la nube');
+    setCloudStatus('Sincronizado · ' + timeStr, 'ok');
+    if (!silent) {
+      showToast('☁ Copia de seguridad subida a la nube');
+    }
+    return true;
   } catch (e) {
-    showToast('Error al respaldar en la nube: ' + e.message);
-    setCloudStatus('Error al subir', 'err');
+    console.error('[CloudSync] Error al respaldar:', e);
+    if (!silent) {
+      showToast('Error al respaldar en la nube: ' + e.message);
+    }
+    setCloudStatus(isAuto ? 'Error al sincronizar · Reintentando...' : 'Error al subir', 'err');
+    throw e;
   } finally {
-    if (pushBtn) {
+    if (pushBtn && !silent) {
       pushBtn.disabled = false;
       pushBtn.innerHTML = originalHTML;
     }
+  }
+}
+
+async function pushToGithub() {
+  try {
+    await executeCloudBackup({ silent: false, isAuto: false });
+  } catch (e) {
+    // Ya gestionado en executeCloudBackup
+  }
+}
+
+function scheduleAutoSync() {
+  if (!_cloudAutoSyncEnabled) return;
+  const password = sessionStorage.getItem('github_sync_pass');
+  if (!password) return;
+
+  if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+  if (_autoSyncRetryTimer) clearTimeout(_autoSyncRetryTimer);
+
+  setCloudStatus('Cambios pendientes...', 'pending');
+
+  _autoSyncTimer = setTimeout(async () => {
+    _autoSyncTimer = null;
+    await runAutoSync();
+  }, AUTO_SYNC_DEBOUNCE_MS);
+}
+
+async function runAutoSync(force = false) {
+  if (_syncModalActive) return;
+  if (!_cloudAutoSyncEnabled && !force) return;
+  const password = sessionStorage.getItem('github_sync_pass');
+  if (!password) return;
+
+  if (_isSyncingCloud) {
+    _autoSyncPending = true;
+    return;
+  }
+
+  if (_autoSyncTimer) {
+    clearTimeout(_autoSyncTimer);
+    _autoSyncTimer = null;
+  }
+
+  _isSyncingCloud = true;
+
+  try {
+    await executeCloudBackup({ silent: true, isAuto: true });
+    _autoSyncRetryCount = 0;
+  } catch (err) {
+    _autoSyncRetryCount++;
+    const delay = Math.min(60000, 5000 * Math.pow(2, _autoSyncRetryCount - 1));
+    _autoSyncRetryTimer = setTimeout(() => {
+      runAutoSync();
+    }, delay);
+  } finally {
+    _isSyncingCloud = false;
+    if (_autoSyncPending) {
+      _autoSyncPending = false;
+      if (_dataDirty) {
+        runAutoSync();
+      }
+    }
+  }
+}
+
+function updateAutoSyncUIState(enabled) {
+  const toggle = document.getElementById('cloud-autosync-toggle');
+  const badge = document.getElementById('cloud-autosync-badge');
+  const subhint = document.getElementById('cloud-autosync-subhint');
+  if (toggle) toggle.checked = !!enabled;
+  if (badge) {
+    badge.textContent = enabled ? 'Activo' : 'Desactivado';
+    badge.classList.toggle('active', !!enabled);
+  }
+  if (subhint) {
+    subhint.textContent = enabled
+      ? 'Sincronizando automáticamente en segundo plano (debounce 3.5s).'
+      : 'Debounce de 3.5s y respaldo inmediato al cambiar o cerrar pestaña.';
   }
 }
 
@@ -3020,11 +4047,18 @@ async function verifyCloudVersionSilently(password, forcePrompt = false) {
     const cloudTime = meta.updatedAt ? new Date(meta.updatedAt).getTime() : 0;
     const localTime = lastSynced ? new Date(lastSynced).getTime() : 0;
 
-    if (forcePrompt || (cloudTime > localTime + 5000)) {
+    // Si el SHA en la nube cambió respecto a la última copia conocida:
+    // 1. Si el usuario forzó la descarga (forcePrompt), siempre se muestra el modal.
+    // 2. Si localmente no hay cambios sin guardar (!_dataDirty), la nube tiene cambios más recientes de otro dispositivo.
+    // 3. Si no hay SHA local previo (!lastBackupSha), es un dispositivo nuevo o reiniciado.
+    // 4. Si la marca de tiempo de la nube es posterior a la local.
+    const shouldPrompt = forcePrompt || !_dataDirty || !lastBackupSha || (cloudTime > 0 && cloudTime > localTime + 3000);
+
+    if (shouldPrompt) {
       const backupData = await callSyncAPI('pull', password);
       showSyncModal(backupData);
     } else {
-      const t = new Date(cloudTime);
+      const t = new Date(cloudTime || Date.now());
       const timeStr = t.toLocaleString('es', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
       setCloudStatus('Sincronizado · ' + timeStr, 'ok');
     }
@@ -3038,6 +4072,12 @@ async function verifyCloudVersionSilently(password, forcePrompt = false) {
 }
 
 function showSyncModal(remote) {
+  _syncModalActive = true;
+  if (_autoSyncTimer) {
+    clearTimeout(_autoSyncTimer);
+    _autoSyncTimer = null;
+  }
+
   const overlay = document.getElementById('sync-modal');
   const msgEl   = document.getElementById('sync-modal-msg');
   const dateStr = new Date(remote.updatedAt).toLocaleString('es', {
@@ -3051,6 +4091,7 @@ function showSyncModal(remote) {
 
   document.getElementById('sync-restore').onclick = async () => {
     overlay.style.display = 'none';
+    _syncModalActive = false;
     setCloudStatus('Restaurando…', '');
     try {
       const count2 = await restoreFromPayload(remote.content);
@@ -3069,9 +4110,13 @@ function showSyncModal(remote) {
 
   document.getElementById('sync-keep-local').onclick = async () => {
     overlay.style.display = 'none';
+    _syncModalActive = false;
     await dbSetMeta('lastBackupTime', remote.content.exported || remote.updatedAt);
     setCloudStatus('Datos locales conservados', 'ok');
     showToast('Datos locales conservados. Se actualizará la nube al respaldar.');
+    if (_cloudAutoSyncEnabled && _dataDirty) {
+      scheduleAutoSync();
+    }
   };
 }
 
@@ -3080,22 +4125,61 @@ function setCloudStatus(msg, type) {
   const dot = document.getElementById('github-status-dot');
   if (txt) { txt.textContent = msg; txt.className = 'cloud-status' + (type ? ' ' + type : ''); }
   if (dot) { dot.className = 'cloud-status-dot' + (type ? ' ' + type : ''); }
+
+  // Header cloud sync pill
+  const headerSync = document.getElementById('header-cloud-sync');
+  const headerDot = document.getElementById('header-cloud-dot');
+  const headerText = document.getElementById('header-cloud-text');
+  if (headerSync) {
+    const isConn = !!sessionStorage.getItem('github_sync_pass');
+    if (isConn) {
+      headerSync.style.display = 'inline-flex';
+      if (headerDot) headerDot.className = 'header-cloud-dot' + (type ? ' ' + type : '');
+      if (headerText) {
+        if (msg.startsWith('Sincronizado')) {
+          headerText.textContent = 'Sincronizado';
+        } else if (msg.includes('Guardando') || msg.includes('Subiendo')) {
+          headerText.textContent = 'Guardando...';
+        } else if (msg.includes('pendientes')) {
+          headerText.textContent = 'Pendiente';
+        } else if (msg.includes('Error')) {
+          headerText.textContent = 'Error';
+        } else {
+          headerText.textContent = msg;
+        }
+      }
+    } else {
+      headerSync.style.display = 'none';
+    }
+  }
 }
 
 function updateGithubUIState(state) {
   const actions = document.getElementById('github-actions-container');
+  const autoSyncContainer = document.getElementById('cloud-autosync-container');
+  const headerSync = document.getElementById('header-cloud-sync');
+
   if (state === 'unconfigured') {
     setCloudStatus('Sin conectar', '');
     if (actions) actions.style.display = 'none';
+    if (autoSyncContainer) autoSyncContainer.style.display = 'none';
+    if (headerSync) headerSync.style.display = 'none';
   } else if (state === 'locked') {
     setCloudStatus('Bloqueado (Requiere contraseña)', 'err');
     if (actions) actions.style.display = 'none';
+    if (autoSyncContainer) autoSyncContainer.style.display = 'none';
+    if (headerSync) headerSync.style.display = 'none';
   } else if (state === 'connected') {
     setCloudStatus('Conectado a la Nube', 'ok');
     if (actions) actions.style.display = 'flex';
+    if (autoSyncContainer) autoSyncContainer.style.display = 'block';
+    if (headerSync) headerSync.style.display = 'inline-flex';
+    updateAutoSyncUIState(_cloudAutoSyncEnabled);
   } else if (state === 'local') {
     setCloudStatus('Desconectado (Modo local)', '');
     if (actions) actions.style.display = 'none';
+    if (autoSyncContainer) autoSyncContainer.style.display = 'none';
+    if (headerSync) headerSync.style.display = 'none';
   }
 }
 
@@ -4052,41 +5136,110 @@ function initStats() {
 }
 
 // ══════════════════════════════════════════
-// IA INTEGRATION (OpenRouter)
+// IA INTEGRATION (OpenRouter & Google AI Studio)
 // ══════════════════════════════════════════
 
+async function callAI(prompt, systemMsg, isJson) {
+  const provider = (await dbGetMeta('aiProvider')) || 'openrouter';
+
+  if (provider === 'googleai' || provider === 'google') {
+    const apiKey = await dbGetMeta('googleAIKey');
+    if (!apiKey) {
+      showToast('⚠️ Falta configurar la API Key de Google AI Studio en Ajustes');
+      return null;
+    }
+    const modelRaw = (await dbGetMeta('googleAIModel')) || 'gemini-2.5-flash';
+    const model = modelRaw.startsWith('models/') ? modelRaw.slice(7) : modelRaw;
+
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const reqBody = {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ]
+      };
+      if (systemMsg) {
+        reqBody.systemInstruction = {
+          parts: [{ text: systemMsg }]
+        };
+      }
+      if (isJson) {
+        reqBody.generationConfig = {
+          responseMimeType: 'application/json'
+        };
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reqBody)
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        const msg = errData?.error?.message || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      return content || null;
+    } catch (err) {
+      console.error('Google AI Studio Error:', err);
+      showToast(`✗ Error IA (Google AI): ${err.message || 'Fallo de conexión'}`);
+      return null;
+    }
+  } else {
+    // OpenRouter
+    const apiKey = await dbGetMeta('openRouterKey');
+    if (!apiKey) {
+      showToast('⚠️ Falta configurar la API Key de OpenRouter en Ajustes');
+      return null;
+    }
+    const model = (await dbGetMeta('openRouterModel')) || 'mistralai/mistral-small-2603';
+
+    try {
+      const messages = [];
+      if (systemMsg) messages.push({ role: 'system', content: systemMsg });
+      messages.push({ role: 'user', content: prompt });
+
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': window.location.href,
+          'X-Title': 'Daily Planner App',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: messages,
+          response_format: isJson ? { type: 'json_object' } : undefined
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        const msg = errData?.error?.message || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content || null;
+    } catch (err) {
+      console.error('OpenRouter Error:', err);
+      showToast(`✗ Error IA (OpenRouter): ${err.message || 'Fallo de conexión'}`);
+      return null;
+    }
+  }
+}
+
+// Retrocompatibilidad
 async function callOpenRouterAPI(prompt, systemMsg, isJson) {
-  const apiKey = await dbGetMeta('openRouterKey');
-  if (!apiKey) {
-    showToast('⚠️ Falta configurar la API Key de OpenRouter en Ajustes');
-    return null;
-  }
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': window.location.href,
-        'X-Title': 'Daily Planner App',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'mistralai/mistral-small-2603',
-        messages: [
-          { role: 'system', content: systemMsg },
-          { role: 'user', content: prompt }
-        ],
-        response_format: isJson ? { type: 'json_object' } : undefined
-      })
-    });
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    const data = await res.json();
-    return data.choices[0].message.content;
-  } catch (err) {
-    console.error('OpenRouter Error:', err);
-    showToast('✗ Error conectando con la IA');
-    return null;
-  }
+  return callAI(prompt, systemMsg, isJson);
 }
 
 // ── Magic Input Logic ──
@@ -4113,7 +5266,7 @@ if (btnMagicGen) {
 }
 No incluyas texto fuera del JSON. Hoy es ${new Date().toISOString().slice(0,10)}`;
 
-    const response = await callOpenRouterAPI(prompt, systemMsg, true);
+    const response = await callAI(prompt, systemMsg, true);
     
     if (response) {
       try {
@@ -4171,7 +5324,7 @@ async function handleAIBreakdown(taskId, btnEl) {
   const systemMsg = `Eres un organizador de tareas. A partir de una tarea, devuelve única y estrictamente un JSON con un array de strings bajo la clave "subtasks". Ejemplo: { "subtasks": ["Paso 1", "Paso 2"] }. El nivel de desglose debe ser secuencial, directo a la acción.`;
   const prompt = `Desglosa la tarea principal en pasos viables: "${t.text}". ${t.desc ? 'Contexto de la tarea: ' + t.desc : ''}`;
 
-  const response = await callOpenRouterAPI(prompt, systemMsg, true);
+  const response = await callAI(prompt, systemMsg, true);
 
   if (response) {
       try {

@@ -1,8 +1,10 @@
 document.getElementById('task-mount').innerHTML = `
-  <div>
-    <div class="section-title" id="list-label">— tareas</div>
-    <div class="task-list" id="task-list" style="margin-top:16px;"></div>
-  </div>
+  <section class="task-section">
+    <div class="section-track-header">
+      <div class="section-title" id="list-label">— TAREAS · HOY · 0</div>
+    </div>
+    <div class="task-list" id="task-list"></div>
+  </section>
 
   <!-- Modal: ¿qué hacer con subtareas al completar padre no recurrente? -->
   <div class="project-confirm-overlay" id="subtask-complete-overlay">

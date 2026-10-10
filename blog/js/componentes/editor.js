@@ -19,7 +19,10 @@ import { initializeDatabases, cleanDatabasesBeforeSave, insertDatabase } from '.
 let autoSaveTimeout = null;
 let lastSavedTitle = '';
 let lastSavedContent = '';
+let lastSavedDatabasesStr = '';
 let lastSnapshotTime = 0;
+let isProgrammaticUpdate = false;
+let editorMutationObserver = null;
 
 let currentColorCommand = null;
 let lastColorSelectionRange = null;
@@ -106,31 +109,56 @@ export function showEmptyState() {
  * Carga una entrada en el editor y actualiza la UI.
  * 
  * @param {string} id - ID del post a cargar
+ * @param {boolean} [force=false] - Forzar recarga del DOM incluso si ya está abierto
  */
-export function loadPost(id) {
+export function loadPost(id, force = false) {
     const post = posts.find(p => p.id === id);
     if (!post) {
         showEmptyState();
         return;
     }
 
+    // Si ya es el post actual y no se fuerza recarga, evitar sobreescribir el DOM
+    // para no perder modificaciones activas.
+    if (currentPostId === id && !force) {
+        hideEmptyState();
+        return;
+    }
+
+    // Si había una entrada previa con cambios pendientes, guardarla antes de cambiar
+    if (currentPostId && currentPostId !== id) {
+        flushPendingAutoSave();
+    }
+
+    if (autoSaveTimeout) {
+        clearTimeout(autoSaveTimeout);
+        autoSaveTimeout = null;
+    }
+
     setCurrentPostId(id);
     hideEmptyState();
 
-    // Rellenar campos del editor
-    const docIcon = document.getElementById('doc-icon');
-    const docTitle = document.getElementById('doc-title');
-    const docContent = document.getElementById('doc-content');
+    // Rellenar campos del editor bajo bandera programática para evitar falsos auto-guardados
+    isProgrammaticUpdate = true;
+    try {
+        const docIcon = document.getElementById('doc-icon');
+        const docTitle = document.getElementById('doc-title');
+        const docContent = document.getElementById('doc-content');
 
-    if (docIcon) docIcon.textContent = post.icon || '📄';
-    if (docTitle) {
-        docTitle.value = post.title || '';
-        docTitle.disabled = !!post.trashed; // Deshabilitar edición si está en la papelera
-    }
-    if (docContent) {
-        docContent.innerHTML = post.content || '';
-        docContent.contentEditable = !post.trashed; // Deshabilitar edición si está en la papelera
-        initializeDatabases();
+        if (docIcon) docIcon.textContent = post.icon || '📄';
+        if (docTitle) {
+            docTitle.value = post.title || '';
+            docTitle.disabled = !!post.trashed; // Deshabilitar edición si está en la papelera
+        }
+        if (docContent) {
+            docContent.innerHTML = post.content || '';
+            docContent.contentEditable = !post.trashed; // Deshabilitar edición si está en la papelera
+            initializeDatabases();
+        }
+    } finally {
+        setTimeout(() => {
+            isProgrammaticUpdate = false;
+        }, 50);
     }
 
     // Actualizar breadcrumbs
@@ -182,9 +210,10 @@ export function loadPost(id) {
         }
     }
 
-    // Guardar copia local para detectar cambios
+    // Guardar copia local normalizada y simétrica para detectar cambios
     lastSavedTitle = post.title || '';
-    lastSavedContent = post.content || '';
+    lastSavedContent = cleanDatabasesBeforeSave(post.content || '');
+    lastSavedDatabasesStr = JSON.stringify(post.databases || {});
     lastSnapshotTime = Date.now();
 
     // Renderizar chips de etiquetas asociadas
@@ -285,7 +314,8 @@ export function createNewPost() {
 }
 
 /**
- * Activa los event listeners de auto-guardado en el editor.
+ * Activa los event listeners de auto-guardado en el editor con soporte omnicanal,
+ * MutationObserver para cambios estructurales/formatos y volcado inmediato.
  */
 export function setupAutoSave() {
     const docTitle = document.getElementById('doc-title');
@@ -293,24 +323,90 @@ export function setupAutoSave() {
 
     if (!docTitle || !docContent) return;
 
-    const triggerSave = () => {
-        if (!currentPostId) return;
-
-        // Mostrar UI de Guardando...
-        const statusText = document.getElementById('status-text');
-        const statusIcon = document.getElementById('status-icon');
-        if (statusText && statusIcon) {
-            statusIcon.textContent = 'cloud_sync';
-            statusIcon.classList.add('saving-pulse');
-            statusText.textContent = 'Guardando...';
-        }
-
-        clearTimeout(autoSaveTimeout);
-        autoSaveTimeout = setTimeout(performAutoSave, 1500);
-    };
-
+    // 1. Título: cambios de entrada y volcado al perder el foco
     docTitle.addEventListener('input', triggerSave);
-    docContent.addEventListener('input', triggerSave);
+    docTitle.addEventListener('blur', () => {
+        if (autoSaveTimeout) flushPendingAutoSave();
+    });
+
+    // 2. Múltiples eventos de interacción sobre el área editable
+    const contentEvents = ['input', 'beforeinput', 'keyup', 'paste', 'cut', 'drop'];
+    contentEvents.forEach(eventType => {
+        docContent.addEventListener(eventType, () => {
+            if (!isProgrammaticUpdate) triggerSave();
+        });
+    });
+
+    // Volcado inmediato al perder el foco el editor
+    docContent.addEventListener('blur', () => {
+        if (autoSaveTimeout) flushPendingAutoSave();
+    });
+
+    // 3. MutationObserver permanente sobre docContent para garantizar la captura
+    // de cualquier mutación estructural (saltos <br>, párrafos, borrado de líneas, etc.)
+    if (editorMutationObserver) {
+        editorMutationObserver.disconnect();
+    }
+    editorMutationObserver = new MutationObserver(() => {
+        if (isProgrammaticUpdate) return;
+        triggerSave();
+    });
+    editorMutationObserver.observe(docContent, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    // 4. Salida de página o cambio de visibilidad: volcado inmediato
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden' && autoSaveTimeout) {
+            flushPendingAutoSave();
+        }
+    });
+    window.addEventListener('beforeunload', () => {
+        if (autoSaveTimeout) {
+            flushPendingAutoSave();
+        }
+    });
+
+    // 5. Atajo universal Ctrl+S / Cmd+S para forzar guardado inmediato manual
+    window.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            flushPendingAutoSave();
+            showToast('Entrada guardada');
+        }
+    });
+}
+
+/**
+ * Fuerza el guardado inmediato de cualquier cambio pendiente sin esperar el temporizador.
+ */
+export function flushPendingAutoSave() {
+    if (autoSaveTimeout) {
+        clearTimeout(autoSaveTimeout);
+        autoSaveTimeout = null;
+    }
+    performAutoSave();
+}
+
+/**
+ * Notifica al sistema que hubo un cambio para disparar la programación del auto-guardado.
+ */
+export function triggerSave() {
+    if (!currentPostId || isProgrammaticUpdate) return;
+
+    // Mostrar UI de Guardando...
+    const statusText = document.getElementById('status-text');
+    const statusIcon = document.getElementById('status-icon');
+    if (statusText && statusIcon) {
+        statusIcon.textContent = 'cloud_sync';
+        statusIcon.classList.add('saving-pulse');
+        statusText.textContent = 'Guardando...';
+    }
+
+    clearTimeout(autoSaveTimeout);
+    autoSaveTimeout = setTimeout(performAutoSave, 1500);
 }
 
 /**
@@ -330,9 +426,11 @@ function performAutoSave() {
     const newTitle = docTitle.value;
     const newContent = docContent.innerHTML;
     const newContentCleaned = cleanDatabasesBeforeSave(newContent);
+    const currentDatabasesStr = JSON.stringify(post.databases || {});
+    const databasesChanged = currentDatabasesStr !== lastSavedDatabasesStr;
 
-    // Verificar si hay cambios reales
-    if (newTitle === lastSavedTitle && newContentCleaned === lastSavedContent) {
+    // Verificar si hay cambios reales (título, contenido HTML o bases de datos)
+    if (newTitle === lastSavedTitle && newContentCleaned === lastSavedContent && !databasesChanged) {
         resetSaveStatus();
         return;
     }
@@ -373,6 +471,7 @@ function performAutoSave() {
     // Actualizar los valores guardados localmente
     lastSavedTitle = newTitle;
     lastSavedContent = newContentCleaned;
+    lastSavedDatabasesStr = currentDatabasesStr;
 
     // Actualizar breadcrumb
     const breadcrumbTitle = document.getElementById('breadcrumb-title');
@@ -893,7 +992,7 @@ export function archiveCurrentPost() {
         loadNextAvailablePost();
     } else {
         // Recargar el post para actualizar icono
-        loadPost(post.id);
+        loadPost(post.id, true);
     }
 }
 
@@ -939,7 +1038,7 @@ export function trashCurrentPost() {
             savePostsToStorage();
             renderFileTree();
             updateSectionCounts();
-            loadPost(post.id);
+            loadPost(post.id, true);
         });
     }
 }
@@ -1547,6 +1646,8 @@ export function togglePostLabel(labelId, isChecked) {
 
 // Exponer funciones al objeto global para eventos inline
 window.loadPost = loadPost;
+window.flushPendingAutoSave = flushPendingAutoSave;
+window.triggerSave = triggerSave;
 window.createNewPost = createNewPost;
 window.formatDoc = formatDoc;
 window.formatInlineCode = formatInlineCode;

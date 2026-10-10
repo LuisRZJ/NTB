@@ -156,7 +156,7 @@ export function restoreVersion(snapshotId) {
 
     // Recargar la entrada en el editor y refrescar el sidebar
     if (typeof window.loadPost === 'function') {
-        window.loadPost(post.id);
+        window.loadPost(post.id, true);
     }
     if (typeof window.renderFileTree === 'function') {
         window.renderFileTree();

@@ -197,6 +197,31 @@ document.getElementById('settings-mount').innerHTML = `
             <button class="settings-data-btn" id="github-push">☁ Respaldar en la Nube</button>
             <button class="settings-data-btn" id="github-pull">↓ Restaurar desde la Nube</button>
           </div>
+
+          <!-- Modo: Sincronización continua automática -->
+          <div class="cloud-autosync-card" id="cloud-autosync-container" style="display: none; margin-top: 14px;">
+            <div class="cloud-autosync-header">
+              <div class="cloud-autosync-title-wrap">
+                <span class="cloud-autosync-icon">🔄</span>
+                <div>
+                  <div class="cloud-autosync-title-row">
+                    <span class="cloud-autosync-title">Sincronización continua en la nube</span>
+                    <span class="cloud-autosync-badge" id="cloud-autosync-badge">Desactivado</span>
+                  </div>
+                  <div class="cloud-autosync-desc">
+                    Guarda automáticamente tus tareas en la nube al crearlas, editarlas o completarlas, sin tener que presionar el botón de respaldo.
+                  </div>
+                </div>
+              </div>
+              <label class="cloud-switch" for="cloud-autosync-toggle" title="Activar/desactivar sincronización continua">
+                <input type="checkbox" id="cloud-autosync-toggle">
+                <span class="cloud-slider"></span>
+              </label>
+            </div>
+            <div class="cloud-autosync-footer">
+              <span class="cloud-autosync-subhint" id="cloud-autosync-subhint">Debounce de 3.5s y respaldo inmediato al cambiar o cerrar pestaña.</span>
+            </div>
+          </div>
         </section>
 
         <!-- Sección: Métricas -->
@@ -223,16 +248,129 @@ document.getElementById('settings-mount').innerHTML = `
             <span class="settings-section-icon">✨</span>
             <h2 class="settings-section-title">Inteligencia Artificial</h2>
           </div>
-          <p class="settings-section-desc">Configura tu clave de API para habilitar funciones inteligentes como desglose de tareas y captura mágica.</p>
+          <p class="settings-section-desc">Configura tus claves de API y modelos preferidos para habilitar funciones inteligentes como desglose de tareas y captura mágica.</p>
 
-          <div class="settings-field">
-            <label class="settings-label" for="openrouter-key">API Key de OpenRouter</label>
-            <div class="cloud-secret-row">
-              <input class="settings-input" id="openrouter-key" type="password" placeholder="sk-or-v1-..." autocomplete="off"/>
-              <button class="settings-data-btn cloud-secret-save" id="openrouter-key-save" title="Guardar clave API">✓</button>
+          <!-- Selector de Proveedor Activo -->
+          <div class="ai-provider-selector-wrap">
+            <label class="settings-label">Proveedor Activo para Tareas Inteligentes</label>
+            <div class="ai-provider-toggle-group" id="ai-provider-group">
+              <button type="button" class="ai-provider-pill active" id="ai-provider-openrouter-btn" data-provider="openrouter">
+                <div class="ai-provider-pill-left">
+                  <span class="ai-provider-pill-icon">⚡</span>
+                  <span class="ai-provider-pill-title">OpenRouter</span>
+                </div>
+                <span class="ai-provider-pill-check">●</span>
+              </button>
+              <button type="button" class="ai-provider-pill" id="ai-provider-googleai-btn" data-provider="googleai">
+                <div class="ai-provider-pill-left">
+                  <span class="ai-provider-pill-icon" style="color: #60a5fa;">✦</span>
+                  <span class="ai-provider-pill-title">Google AI Studio</span>
+                </div>
+                <span class="ai-provider-pill-check">●</span>
+              </button>
             </div>
-            <span class="settings-section-desc" style="margin-top:2px">Tus claves se guardan solo en tu dispositivo y se sincronizan en tu backup.</span>
           </div>
+
+          <!-- Tarjetas de Proveedores -->
+          <div class="ai-cards-container">
+
+            <!-- Tarjeta 1: OpenRouter -->
+            <div class="ai-card active-provider" id="ai-card-openrouter">
+              <div class="ai-card-header">
+                <div class="ai-card-header-left">
+                  <span class="ai-card-icon">⚡</span>
+                  <div>
+                    <h3 class="ai-card-title">OpenRouter</h3>
+                    <span class="ai-card-subtitle">Acceso multimodelo (Claude, DeepSeek, Llama, Mistral...)</span>
+                  </div>
+                </div>
+                <span class="ai-active-badge" id="ai-badge-openrouter">ACTIVO</span>
+              </div>
+
+              <!-- API Key de OpenRouter -->
+              <div class="settings-field" style="margin-top: 14px;">
+                <label class="settings-label" for="openrouter-key">API Key de OpenRouter</label>
+                <div class="ai-key-input-wrap">
+                  <input class="settings-input" id="openrouter-key" type="password" placeholder="sk-or-v1-..." autocomplete="off"/>
+                  <div class="ai-key-actions">
+                    <button type="button" class="ai-icon-btn" id="openrouter-key-reveal" title="Mostrar/ocultar clave">
+                      <span class="material-symbols-outlined">visibility</span>
+                    </button>
+                    <button type="button" class="ai-icon-btn" id="openrouter-key-copy" title="Copiar al portapapeles">
+                      <span class="material-symbols-outlined">content_copy</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Modelo Preferido de OpenRouter -->
+              <div class="settings-field" style="margin-top: 10px;">
+                <label class="settings-label" for="openrouter-model">Modelo Preferido (ID)</label>
+                <input class="settings-input" id="openrouter-model" type="text" placeholder="Ej: mistralai/mistral-small-2603, anthropic/claude-3.5-sonnet" autocomplete="off"/>
+                <span class="ai-field-hint">Escribe el ID exacto del modelo disponible en OpenRouter.</span>
+              </div>
+
+              <!-- Botón Guardar y Validar OpenRouter -->
+              <div class="ai-card-footer">
+                <button type="button" class="settings-btn-primary ai-save-validate-btn" id="openrouter-save-btn">
+                  <span class="ai-save-btn-icon">✓</span>
+                  <span class="ai-save-btn-text">Guardar y Validar</span>
+                </button>
+                <div class="ai-status-msg" id="openrouter-status-msg"></div>
+              </div>
+            </div>
+
+            <!-- Tarjeta 2: Google AI Studio (Gemini) -->
+            <div class="ai-card" id="ai-card-googleai" style="margin-top: 16px;">
+              <div class="ai-card-header">
+                <div class="ai-card-header-left">
+                  <span class="ai-card-icon" style="color: #60a5fa;">✦</span>
+                  <div>
+                    <h3 class="ai-card-title">Google AI Studio</h3>
+                    <span class="ai-card-subtitle">Modelos Gemini rápidos de Google</span>
+                  </div>
+                </div>
+                <span class="ai-active-badge" id="ai-badge-googleai" style="display:none;">ACTIVO</span>
+              </div>
+
+              <!-- API Key de Google AI Studio -->
+              <div class="settings-field" style="margin-top: 14px;">
+                <label class="settings-label" for="googleai-key">API Key de Google AI Studio</label>
+                <div class="ai-key-input-wrap">
+                  <input class="settings-input" id="googleai-key" type="password" placeholder="AIzaSy..." autocomplete="off"/>
+                  <div class="ai-key-actions">
+                    <button type="button" class="ai-icon-btn" id="googleai-key-reveal" title="Mostrar/ocultar clave">
+                      <span class="material-symbols-outlined">visibility</span>
+                    </button>
+                    <button type="button" class="ai-icon-btn" id="googleai-key-copy" title="Copiar al portapapeles">
+                      <span class="material-symbols-outlined">content_copy</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Modelo Preferido de Google AI Studio -->
+              <div class="settings-field" style="margin-top: 10px;">
+                <label class="settings-label" for="googleai-model">Modelo Preferido (ID)</label>
+                <input class="settings-input" id="googleai-model" type="text" placeholder="Ej: gemini-2.5-flash, gemini-1.5-flash, gemini-2.5-pro" autocomplete="off"/>
+                <span class="ai-field-hint">Escribe el identificador del modelo Gemini (sin selector).</span>
+              </div>
+
+              <!-- Botón Guardar y Validar Google AI Studio -->
+              <div class="ai-card-footer">
+                <button type="button" class="settings-btn-primary ai-save-validate-btn" id="googleai-save-btn">
+                  <span class="ai-save-btn-icon">✓</span>
+                  <span class="ai-save-btn-text">Guardar y Validar</span>
+                </button>
+                <div class="ai-status-msg" id="googleai-status-msg"></div>
+              </div>
+            </div>
+
+          </div>
+
+          <span class="settings-section-desc" style="margin-top:14px; font-size: 11px;">
+            🔒 Tus claves se guardan solo en tu dispositivo y se sincronizan cifradas en tu backup.
+          </span>
         </section>
 
       </div>

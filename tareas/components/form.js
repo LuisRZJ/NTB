@@ -1,8 +1,12 @@
 // Botón flotante de navegación + panel modal minimalista
 document.getElementById('form-mount').innerHTML = `
-  <!-- Menú de navegación flotante minimalista (Ajustes y Documentación) -->
+  <!-- Menú de navegación flotante minimalista (Chat IA, Ajustes y Documentación) -->
   <div class="nav-fab-wrap" id="nav-fab-wrap">
     <div class="nav-fab-menu" id="nav-fab-menu" aria-hidden="true">
+      <button class="nav-fab-item" data-nav="chat-ia" title="Chat con Inteligencia Artificial">
+        <span class="nav-fab-item-icon">✦</span>
+        <span class="nav-fab-item-label">Chat IA</span>
+      </button>
       <button class="nav-fab-item" data-nav="docs" title="Documentación y API REST">
         <span class="nav-fab-item-icon">⚡</span>
         <span class="nav-fab-item-label">API REST</span>

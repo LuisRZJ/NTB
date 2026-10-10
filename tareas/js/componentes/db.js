@@ -19,12 +19,14 @@
  */
 
 const DB_NAME    = 'TareasDB';
-const DB_VERSION = 5;
+const DB_VERSION = 7;
 const STORE      = 'tasks';
 const CAT_STORE  = 'categories';
 const PROJ_STORE = 'projects';
 const META_STORE = 'meta';
 const HIST_STORE = 'history';
+const CHAT_STORE = 'ai_chats';
+const CHAT_FOLDER_STORE = 'ai_chat_folders';
 let _db = null;
 
 function dbInit() {
@@ -47,6 +49,12 @@ function dbInit() {
       if (!db.objectStoreNames.contains(HIST_STORE)) {
         const hs = db.createObjectStore(HIST_STORE, { keyPath: 'id' });
         hs.createIndex('by_ts', 'ts', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(CHAT_STORE)) {
+        db.createObjectStore(CHAT_STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(CHAT_FOLDER_STORE)) {
+        db.createObjectStore(CHAT_FOLDER_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = e => { _db = e.target.result; resolve(_db); };
@@ -192,6 +200,80 @@ function dbGetHistory() {
 function dbClearHistory() {
   return new Promise((resolve, reject) => {
     const req = _histStore('readwrite').clear();
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// ── Conversaciones de Chat con IA ──
+function _chatStore(mode) {
+  return _db.transaction(CHAT_STORE, mode).objectStore(CHAT_STORE);
+}
+
+function dbGetAllChats() {
+  return new Promise((resolve, reject) => {
+    const req = _chatStore('readonly').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbPutChat(chat) {
+  return new Promise((resolve, reject) => {
+    const req = _chatStore('readwrite').put(chat);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbDeleteChat(id) {
+  return new Promise((resolve, reject) => {
+    const req = _chatStore('readwrite').delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbClearChats() {
+  return new Promise((resolve, reject) => {
+    const req = _chatStore('readwrite').clear();
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// ── Carpetas de Chat con IA ──
+function _chatFolderStore(mode) {
+  return _db.transaction(CHAT_FOLDER_STORE, mode).objectStore(CHAT_FOLDER_STORE);
+}
+
+function dbGetAllChatFolders() {
+  return new Promise((resolve, reject) => {
+    const req = _chatFolderStore('readonly').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbPutChatFolder(folder) {
+  return new Promise((resolve, reject) => {
+    const req = _chatFolderStore('readwrite').put(folder);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbDeleteChatFolder(id) {
+  return new Promise((resolve, reject) => {
+    const req = _chatFolderStore('readwrite').delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbClearChatFolders() {
+  return new Promise((resolve, reject) => {
+    const req = _chatFolderStore('readwrite').clear();
     req.onsuccess = () => resolve();
     req.onerror   = e => reject(e.target.error);
   });

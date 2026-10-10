@@ -23,6 +23,11 @@ let _searchResultCache = new Map();
 let _searchDebounceTimer = null;
 let _searchRenderLimit = 250;
 let _taskTitleMapCache = null;
+let aiChats = [];
+let aiChatFolders = [];
+let _aiContextRevision = 0;
+let _aiContextCache = null;
+const _aiToolQueryCache = new Map();
 const SEARCH_RENDER_STEP = 250;
 const SEARCH_DEBOUNCE_MS = 130;
 const SEARCH_CACHE_LIMIT = 15;
@@ -32,6 +37,9 @@ function markDirty() {
   _searchIndexDirty = true;
   _searchResultCache.clear();
   _taskTitleMapCache = null;
+  _aiContextRevision++;
+  _aiContextCache = null;
+  _aiToolQueryCache.clear();
   if (typeof scheduleAutoSync === 'function' && _cloudAutoSyncEnabled) {
     scheduleAutoSync();
   }
@@ -428,6 +436,114 @@ async function loadTasks() {
   }
 }
 
+async function loadAIChats() {
+  try {
+    const raw = typeof dbGetAllChats === 'function' ? await dbGetAllChats() : [];
+    aiChats = Array.isArray(raw) ? raw : [];
+    aiChats.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  } catch (err) {
+    console.warn('Error cargando aiChats:', err);
+    aiChats = [];
+  }
+}
+
+const FOLDER_CONTEXT_MAX_TOKENS = 5000;
+
+/**
+ * Calcula una estimación conservadora de tokens BPE (español/inglés/código)
+ * combinando conteo léxico de palabras/símbolos y proporción de caracteres (~3.8 chars/token).
+ */
+function estimateFolderContextTokens(text) {
+  if (!text) return 0;
+  const str = String(text);
+  if (!str.trim()) return 0;
+
+  const charBased = Math.ceil(str.length / 3.8);
+  const segments = str.trim().match(/[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu) || [];
+  let lexicalTokens = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const len = segments[i].length;
+    lexicalTokens += len > 6 ? Math.ceil(len / 4.2) : 1;
+  }
+  return Math.max(1, Math.max(charBased, lexicalTokens));
+}
+
+/**
+ * Garantiza que un texto de contexto de carpeta no supere el máximo de tokens permitido (5,000 tokens).
+ * Utiliza búsqueda binaria cuando el texto excede el límite para recortar con precisión inmediata.
+ */
+function truncateToMaxFolderTokens(text, maxTokens = FOLDER_CONTEXT_MAX_TOKENS) {
+  const str = String(text || '');
+  const initialTokens = estimateFolderContextTokens(str);
+  if (initialTokens <= maxTokens) {
+    return { text: str, truncated: false, tokens: initialTokens };
+  }
+
+  let low = 0;
+  let high = str.length;
+  let best = '';
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const candidate = str.slice(0, mid);
+    if (estimateFolderContextTokens(candidate) <= maxTokens) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return {
+    text: best,
+    truncated: true,
+    tokens: estimateFolderContextTokens(best)
+  };
+}
+
+function normalizeAIChatFolder(rawFolder) {
+  if (!rawFolder || typeof rawFolder !== 'object') return null;
+  const rawContext = typeof rawFolder.contextPrompt === 'string' ? rawFolder.contextPrompt.trim() : '';
+  const capped = rawContext
+    ? truncateToMaxFolderTokens(rawContext, FOLDER_CONTEXT_MAX_TOKENS)
+    : { text: '', tokens: 0 };
+  return {
+    ...rawFolder,
+    contextPrompt: capped.text,
+    contextTokens: capped.tokens
+  };
+}
+
+async function loadAIChatFolders() {
+  try {
+    const raw = typeof dbGetAllChatFolders === 'function' ? await dbGetAllChatFolders() : [];
+    aiChatFolders = (Array.isArray(raw) ? raw : [])
+      .map(normalizeAIChatFolder)
+      .filter(Boolean);
+    aiChatFolders.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  } catch (err) {
+    console.warn('Error cargando aiChatFolders:', err);
+    aiChatFolders = [];
+  }
+}
+
+/**
+ * Caso límite de integridad referencial: si algún chat apunta a un folderId que ya no existe,
+ * limpia la referencia huérfana a null para que el chat nunca quede oculto ni inaccesible.
+ */
+async function sanitizeAIChatFolderReferences() {
+  if (!Array.isArray(aiChats) || !aiChats.length) return;
+  const validFolderIds = new Set((aiChatFolders || []).map(f => String(f.id)));
+  for (const chat of aiChats) {
+    if (chat.folderId && !validFolderIds.has(String(chat.folderId))) {
+      chat.folderId = null;
+      if (typeof dbPutChat === 'function') {
+        await dbPutChat(chat).catch(() => {});
+      }
+    }
+  }
+}
+
 // ── CRUD ──
 async function addTask() {
   const input = document.getElementById('new-task');
@@ -803,8 +919,7 @@ function priorityTasks() {
   return tasks.filter(t => !t.parentId && t.pri === priFilter);
 }
 
-function scopedTasks() {
-  const src = priorityTasks();
+function applyDateScope(src) {
   if (dateScope === 'today') {
     const todayStr = todayISO();
     return src.filter(t => isTaskScheduledForDate(t, todayStr));
@@ -823,24 +938,30 @@ function scopedTasks() {
     const monthPrefix = todayISO().slice(0, 7);
     return src.filter(t => t.due && t.due.startsWith(monthPrefix));
   }
-  if (dateScope === 'nodate')   return src.filter(t => !t.due && !t.done);
+  if (dateScope === 'nodate') return src.filter(t => !t.due && !t.done);
   return src.filter(t => t.due);
 }
 
-function filteredTasks() {
+function applyFilterMode(src) {
   const base = filterMode === 'done'
-    ? scopedTasks().filter(t => t.done)
-    : scopedTasks().filter(t => !t.done);
-  let result;
+    ? src.filter(t => t.done)
+    : src.filter(t => !t.done);
   switch(filterMode) {
-    case 'done':    result = base; break;
-    case 'pending': result = base; break;
+    case 'done':    return base;
+    case 'pending': return base;
     default:
-      if (filterMode in CATS) result = base.filter(t => getTaskCats(t).includes(filterMode));
-      else if (filterMode.startsWith('proj:')) result = base.filter(t => String(t.project) === filterMode.slice(5));
-      else result = base;
+      if (filterMode in CATS) return base.filter(t => getTaskCats(t).includes(filterMode));
+      if (filterMode.startsWith('proj:')) return base.filter(t => String(t.project) === filterMode.slice(5));
+      return base;
   }
-  return sortTasks(result);
+}
+
+function scopedTasks() {
+  return applyDateScope(priorityTasks());
+}
+
+function filteredTasks() {
+  return sortTasks(applyFilterMode(scopedTasks()));
 }
 
 // Pendientes: fecha asc (vencidas primero, sin fecha al final)
@@ -1303,20 +1424,22 @@ function render() {
   const ringFraction = document.getElementById('ring-fraction');
   const ringWrap = ringFill ? ringFill.closest('.progress-ring') : null;
 
-  // Actualizar contadores de las píldoras segmentadas de prioridad
+  // Actualizar contadores de las píldoras segmentadas de prioridad (independientes de priFilter activo)
+  const allTopScoped = applyDateScope(tasks.filter(t => !t.parentId));
+  const allPriPool = searchActive ? searchResults : applyFilterMode(allTopScoped);
   const cTodas = document.getElementById('countTodas');
   const cSugerencias = document.getElementById('countSugerencias');
   const cAlta  = document.getElementById('countAlta');
   const cMedia = document.getElementById('countMedia');
   const cBaja  = document.getElementById('countBaja');
-  if (cTodas) cTodas.textContent = scoped.length;
+  if (cTodas) cTodas.textContent = allPriPool.length;
   if (cSugerencias) {
     const analysis = getSuggestionsAnalysis();
     cSugerencias.textContent = analysis.suggestions.length;
   }
-  if (cAlta)  cAlta.textContent  = scoped.filter(t => t.pri === 'high').length;
-  if (cMedia) cMedia.textContent = scoped.filter(t => t.pri === 'mid').length;
-  if (cBaja)  cBaja.textContent  = scoped.filter(t => t.pri === 'low').length;
+  if (cAlta)  cAlta.textContent  = allPriPool.filter(t => t.pri === 'high').length;
+  if (cMedia) cMedia.textContent = allPriPool.filter(t => t.pri === 'mid').length;
+  if (cBaja)  cBaja.textContent  = allPriPool.filter(t => t.pri === 'low').length;
 
   if (isToday) {
     if (ringWrap) ringWrap.classList.remove('ring-disabled');
@@ -1340,8 +1463,8 @@ function render() {
     if (ringPct) ringPct.style.color = 'var(--text)';
   } else {
     if (ringWrap) ringWrap.classList.remove('ring-disabled');
-    const sTotalCount = scoped.length;
-    const sDoneCount  = scoped.filter(t => t.done).length;
+    const sTotalCount = allTopScoped.length;
+    const sDoneCount  = allTopScoped.filter(t => t.done).length;
     const scopedPct   = sTotalCount ? Math.round(sDoneCount / sTotalCount * 100) : 0;
     if (ringPct) ringPct.textContent = scopedPct + '%';
     if (ringFraction) ringFraction.textContent = `${sDoneCount} de ${sTotalCount}`;
@@ -1743,6 +1866,9 @@ function triggerSearchRender(immediate = false) {
     }).catch(() => {});
   }
   await loadTasks();
+  await loadAIChats();
+  await loadAIChatFolders();
+  await sanitizeAIChatFolderReferences();
   await loadCustomCats();
   await loadProjects();
   initDatePicker();
@@ -1754,6 +1880,7 @@ function triggerSearchRender(immediate = false) {
   scheduleMinuteTick();
   initHistory();
   initDocs();
+  initAIChat();
   await migrateHistoryRetroactive();
   document.getElementById('loader').classList.add('hidden');
 
@@ -2663,6 +2790,7 @@ document.querySelectorAll('.nav-fab-item[data-nav]').forEach(btn => {
   if (btn.dataset.nav === 'estadistica') return; // wired in initStats
   if (btn.dataset.nav === 'historial')   return; // wired in initHistory
   if (btn.dataset.nav === 'docs')        return; // wired in initDocs
+  if (btn.dataset.nav === 'chat-ia')     return; // wired in initAIChat
   btn.addEventListener('click', () => {
     closeNav();
     // TODO: implementar sección correspondiente
@@ -2750,7 +2878,8 @@ function renderStorageUsage() {
     Object.entries(CATS).filter(([k]) => !(['trabajo','personal','salud','otro'].includes(k)))
   )).length;
   const projBytes  = new TextEncoder().encode(JSON.stringify(PROJECTS)).length;
-  const total = tasksBytes + catsBytes + projBytes;
+  const chatsBytes = new TextEncoder().encode(JSON.stringify({ chats: aiChats || [], folders: aiChatFolders || [] })).length;
+  const total = tasksBytes + catsBytes + projBytes + chatsBytes;
 
   // IndexedDB quota hint (if available)
   const QUOTA_ESTIMATE = 5 * 1024 * 1024; // 5 MB conservative reference
@@ -2763,6 +2892,7 @@ function renderStorageUsage() {
     `<span>Tareas: ${fmt(tasksBytes)}</span>` +
     `<span>Proyectos: ${fmt(projBytes)}</span>` +
     `<span>Categorías: ${fmt(catsBytes)}</span>` +
+    `<span>Chats IA: ${fmt(chatsBytes)}</span>` +
     `<span>${tasks.length} tarea${tasks.length !== 1 ? 's' : ''}</span>`;
 
   // Use Storage API for real quota if supported
@@ -3135,6 +3265,7 @@ async function initSettings() {
 
     if (aiBadgeOpenRouter) aiBadgeOpenRouter.style.display = !isGoogle ? 'inline-block' : 'none';
     if (aiBadgeGoogleAI)   aiBadgeGoogleAI.style.display = isGoogle ? 'inline-block' : 'none';
+    if (typeof updateAIChatModelBadge === 'function') updateAIChatModelBadge();
   }
 
   // Cargar valores iniciales
@@ -3157,6 +3288,7 @@ async function initSettings() {
     aiPillOpenRouter.addEventListener('click', async () => {
       await dbSetMeta('aiProvider', 'openrouter');
       updateAIProviderUI('openrouter');
+      markDirty();
       showToast('✓ Proveedor activo: OpenRouter');
     });
   }
@@ -3164,6 +3296,7 @@ async function initSettings() {
     aiPillGoogleAI.addEventListener('click', async () => {
       await dbSetMeta('aiProvider', 'googleai');
       updateAIProviderUI('googleai');
+      markDirty();
       showToast('✓ Proveedor activo: Google AI Studio');
     });
   }
@@ -3245,6 +3378,8 @@ async function initSettings() {
 
         await dbSetMeta('openRouterKey', key);
         await dbSetMeta('openRouterModel', model);
+        markDirty();
+        if (typeof updateAIChatModelBadge === 'function') updateAIChatModelBadge();
 
         if (orStatusMsg) {
           orStatusMsg.textContent = '✓ Conexión exitosa y guardada';
@@ -3305,6 +3440,8 @@ async function initSettings() {
 
         await dbSetMeta('googleAIKey', key);
         await dbSetMeta('googleAIModel', modelRaw);
+        markDirty();
+        if (typeof updateAIChatModelBadge === 'function') updateAIChatModelBadge();
 
         if (gStatusMsg) {
           gStatusMsg.textContent = '✓ Conexión con Gemini exitosa y guardada';
@@ -3348,6 +3485,7 @@ async function initSettings() {
     makerSave.addEventListener('click', async () => {
       const selected = [...document.querySelectorAll('.maker-cat-btn.active')].map(b => b.dataset.key);
       await dbSetMeta('makerCategories', selected);
+      markDirty();
       showToast('✓ Configuración de métricas guardada');
     });
   }
@@ -3397,10 +3535,14 @@ async function clearAllData() {
   const confirmEl = document.getElementById('data-clear-confirm');
   try {
     await dbClear();
+    if (typeof dbClearChats === 'function') await dbClearChats();
+    if (typeof dbClearChatFolders === 'function') await dbClearChatFolders();
     for (const c of await dbGetAllCats()) await dbDeleteCat(c.key);
     for (const p of await dbGetAllProjects()) await dbDeleteProject(p.id);
 
     tasks = [];
+    aiChats = [];
+    aiChatFolders = [];
     CATS = { ...CATS_DEFAULT };
     await loadProjects();
 
@@ -3409,6 +3551,7 @@ async function clearAllData() {
     rebuildFilterButtons();
     await renderSettingsCats();
     await render();
+    if (typeof refreshAIChatUI === 'function') refreshAIChatUI(true);
 
     confirmEl.style.display = 'none';
     statusEl.textContent = '✓ Datos borrados.';
@@ -3427,10 +3570,12 @@ async function clearAllData() {
 async function restoreFromPayload(payload) {
   if (!payload || !Array.isArray(payload.tasks)) throw new Error('Payload inválido');
   const incoming = {
-    tasks:      Array.isArray(payload.tasks)      ? payload.tasks      : [],
-    categories: Array.isArray(payload.categories) ? payload.categories : [],
-    projects:   Array.isArray(payload.projects)   ? payload.projects   : [],
-    history:    Array.isArray(payload.history)    ? payload.history    : []
+    tasks:         Array.isArray(payload.tasks)         ? payload.tasks         : [],
+    categories:    Array.isArray(payload.categories)    ? payload.categories    : [],
+    projects:      Array.isArray(payload.projects)      ? payload.projects      : [],
+    history:       Array.isArray(payload.history)       ? payload.history       : [],
+    aiChats:       Array.isArray(payload.aiChats)       ? payload.aiChats       : null,
+    aiChatFolders: Array.isArray(payload.aiChatFolders) ? payload.aiChatFolders : null
   };
   await dbClear();
   for (const t of incoming.tasks)      await dbPut(t);
@@ -3442,6 +3587,19 @@ async function restoreFromPayload(payload) {
   if (incoming.history.length) {
     await dbClearHistory();
     for (const h of incoming.history) await dbAddHistory(h);
+  }
+  // Restaurar carpetas de IA si vienen en el payload (incluyendo contexto precargado <= 5,000 tokens)
+  if (incoming.aiChatFolders !== null && typeof dbClearChatFolders === 'function') {
+    await dbClearChatFolders();
+    for (const fd of incoming.aiChatFolders) {
+      const normFd = normalizeAIChatFolder(fd);
+      if (normFd && normFd.id) await dbPutChatFolder(normFd);
+    }
+  }
+  // Restaurar conversaciones de IA si vienen en el payload
+  if (incoming.aiChats !== null && typeof dbClearChats === 'function') {
+    await dbClearChats();
+    for (const ch of incoming.aiChats) await dbPutChat(ch);
   }
   
   if (payload.meta) {
@@ -3498,6 +3656,9 @@ async function restoreFromPayload(payload) {
   }
 
   tasks = await dbGetAll();
+  await loadAIChats();
+  await loadAIChatFolders();
+  await sanitizeAIChatFolderReferences();
   CATS  = { ...CATS_DEFAULT };
   await loadCustomCats();
   await loadProjects();
@@ -3506,10 +3667,14 @@ async function restoreFromPayload(payload) {
   rebuildFilterButtons();
   if (document.getElementById('settings-cats-default')) await renderSettingsCats();
   await render();
+  if (typeof refreshAIChatUI === 'function') refreshAIChatUI();
   _dataDirty = false;
   _searchIndexDirty = true;
   _searchResultCache.clear();
   _taskTitleMapCache = null;
+  _aiContextRevision++;
+  _aiContextCache = null;
+  _aiToolQueryCache.clear();
   return incoming.tasks.length;
 }
 
@@ -3517,12 +3682,14 @@ async function restoreFromPayload(payload) {
 async function exportData() {
   try {
     const [
-      taskList, catList, projList, histList,
+      taskList, catList, projList, histList, chatList, folderList,
       orKey, orModel, gKey, gModel, aiProv,
       makerCats, savedThemeConfig,
       cloudAutoSync
     ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
+      typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
+      typeof dbGetAllChatFolders === 'function' ? dbGetAllChatFolders() : Promise.resolve([]),
       dbGetMeta('openRouterKey'), dbGetMeta('openRouterModel'),
       dbGetMeta('googleAIKey'), dbGetMeta('googleAIModel'),
       dbGetMeta('aiProvider'),
@@ -3536,6 +3703,8 @@ async function exportData() {
       categories: catList,
       projects: projList,
       history: histList,
+      aiChats: chatList,
+      aiChatFolders: folderList,
       meta: {
         openRouterKey: orKey || null,
         openRouterModel: orModel || null,
@@ -3868,12 +4037,14 @@ async function executeCloudBackup(options = {}) {
 
   try {
     const [
-      taskList, catList, projList, histList,
+      taskList, catList, projList, histList, chatList, folderList,
       orKey, orModel, gKey, gModel, aiProv,
       makerCats, savedThemeConfig,
       cloudAutoSync
     ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
+      typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
+      typeof dbGetAllChatFolders === 'function' ? dbGetAllChatFolders() : Promise.resolve([]),
       dbGetMeta('openRouterKey'), dbGetMeta('openRouterModel'),
       dbGetMeta('googleAIKey'), dbGetMeta('googleAIModel'),
       dbGetMeta('aiProvider'),
@@ -3888,6 +4059,8 @@ async function executeCloudBackup(options = {}) {
       categories: catList,
       projects: projList,
       history: histList,
+      aiChats: chatList,
+      aiChatFolders: folderList,
       meta: {
         openRouterKey: orKey || null,
         openRouterModel: orModel || null,
@@ -5761,4 +5934,2523 @@ async function runDocsApiTest() {
 }
 
 window.openDocs = openDocs;
-window.closeDocs = closeDocs;
+window.closeDocs = closeDocs;
+
+// ══════════════════════════════════════════════════════════════════════════
+// PLATAFORMA DE CHAT CON IA (PANTALLA COMPLETA + CONTEXTO EN CACHÉ + TOOLS)
+// ══════════════════════════════════════════════════════════════════════════
+
+let aiChatScreen = null;
+let currentAIChatId = null;
+let activeAIChatTab = 'home'; // 'home' | 'chats'
+let aiChatSearchQuery = '';
+let _isAIChatGenerating = false;
+let _renamingChatId = null;
+let _deletingChatId = null;
+
+const AI_HISTORY_WINDOW_MAX = 18;
+const AI_HISTORY_RECENT_KEEP = 16;
+const AI_CONTEXT_CACHE_TTL_MS = 60000;
+
+/**
+ * Construye el extracto base de tareas y el System Prompt con caché multinivel.
+ * Se invalida automáticamente cuando markDirty() incrementa _aiContextRevision.
+ */
+async function buildAISystemContext() {
+  const today = todayISO();
+  const nowMs = Date.now();
+
+  if (
+    _aiContextCache &&
+    _aiContextCache.dateKey === today &&
+    _aiContextCache.revision === _aiContextRevision &&
+    (nowMs - _aiContextCache.ts) < AI_CONTEXT_CACHE_TTL_MS
+  ) {
+    return _aiContextCache.prompt;
+  }
+
+  const makerCats = (await dbGetMeta('makerCategories').catch(() => null)) || [];
+  const topTasks = tasks.filter(t => !t.parentId);
+  const pendingTop = topTasks.filter(t => !t.done);
+  const doneToday = topTasks.filter(t => t.done && t.doneAt === today);
+  const overdueTop = pendingTop.filter(t => isTaskOverdue(t));
+
+  const formatCompactTask = (t) => {
+    const cats = getTaskCats(t).map(k => CATS[k]?.label || k).join(', ');
+    const proj = t.project ? (getProjectById(Number(t.project))?.name || '') : '';
+    const subs = getSubtasks(t.id);
+    const subInfo = subs.length ? ` | Subtareas: ${subs.filter(s => s.done).length}/${subs.length}` : '';
+    const snoozes = Array.isArray(t.snoozedDates) && t.snoozedDates.length ? ` | Pospuesta ${t.snoozedDates.length}x` : '';
+    const dueInfo = t.due ? `${t.due}${t.dueTime ? ' ' + t.dueTime : ''}` : 'Sin fecha';
+    return `- [ID:${t.id}] "${t.text}" | Pri:${t.pri || 'mid'} | Estado:${t.done ? 'Completada' : 'Pendiente'} | Fecha:${dueInfo}${proj ? ' | Proy:' + proj : ''}${cats ? ' | Cat:' + cats : ''}${subInfo}${snoozes}`;
+  };
+
+  // 1. Tareas de Hoy (pendientes y completadas hoy)
+  const todayPending = sortTasks(pendingTop.filter(t => isTaskScheduledForDate(t, today)));
+  const todayLines = [
+    ...todayPending.slice(0, 20).map(formatCompactTask),
+    ...doneToday.slice(0, 10).map(formatCompactTask)
+  ];
+
+  // 2. Top 10 Tareas Vencidas / Atrasadas
+  const overdueSorted = [...overdueTop].sort((a, b) => (a.due || '').localeCompare(b.due || ''));
+  const overdueLines = overdueSorted.slice(0, 10).map(formatCompactTask);
+
+  // 3. Top 8 Próximas Tareas (mañana y próximos 7 días)
+  const nextWeekDate = addDays(today, 7);
+  const upcoming = sortTasks(
+    pendingTop.filter(t => t.due && t.due > today && t.due <= nextWeekDate)
+  ).slice(0, 8);
+  const upcomingLines = upcoming.map(formatCompactTask);
+
+  // 4. Resumen de Proyectos y Categorías
+  const projSummary = PROJECTS.length
+    ? PROJECTS.map(p => {
+        const pTasks = topTasks.filter(t => String(t.project) === String(p.id));
+        const pPend = pTasks.filter(t => !t.done).length;
+        const pDone = pTasks.filter(t => t.done).length;
+        return `[ID:${p.id}] ${p.name} (${pPend} pend / ${pDone} comp)`;
+      }).join(' · ')
+    : 'Ningún proyecto creado aún';
+
+  const catSummary = Object.entries(CATS).map(([k, c]) => {
+    const isMaker = makerCats.includes(k) ? ' [Maker]' : '';
+    return `${k}: ${c.label}${isMaker}`;
+  }).join(' · ');
+
+  // 5. Salud Operativa (Motor de Sugerencias)
+  let healthSummary = '';
+  if (typeof analyzeTasksForSuggestions === 'function') {
+    try {
+      const diag = analyzeTasksForSuggestions();
+      healthSummary = `Puntaje de Salud Operativa: ${diag.healthScore}/100 (${diag.healthLabel}) · Pospuestas crónicas: ${diag.metrics.chronicCount} · Estancadas: ${diag.metrics.stagnantCount} · Sin fecha: ${diag.metrics.unscheduledCount}`;
+    } catch (e) {}
+  }
+
+  const daysName = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date().getDay()];
+
+  const prompt = `Eres el Asistente IA integrado en "Daily Planner" (Módulo de Tareas).
+Responde siempre en español con un tono profesional, cálido, directo y analítico. Utiliza formato Markdown claro (listas, negritas, tablas o bloques de código cuando aporten claridad).
+
+=== HABILIDADES Y HERRAMIENTAS DE BASE DE DATOS (TOOL CALLING) ===
+Además del extracto en caché que recibes abajo, tienes acceso directo a la base de datos IndexedDB del usuario mediante 7 habilidades.
+Cuando necesites consultar más tareas (históricas, de otros meses, descripciones completas, subtareas, historial de actividad) o cuando el usuario te pida crear, completar o modificar una tarea, emite ÚNICAMENTE un bloque con este formato exacto:
+<tool_call>{"tool": "NOMBRE_HERRAMIENTA", "args": {...}}</tool_call>
+
+Herramientas disponibles:
+1. "search_tasks": Busca en todas las tareas de la base de datos.
+   args: { "query": "texto opcional", "status": "pending|done|overdue|all", "priority": "high|mid|low", "category": "clave_cat", "projectId": numero_o_texto, "dateFrom": "YYYY-MM-DD", "dateTo": "YYYY-MM-DD", "includeSubtasks": true|false, "limit": 25 }
+2. "get_task_details": Obtiene la nota/descripción Markdown completa, historial de posposiciones y todas las subtareas de una tarea.
+   args: { "taskId": id_de_la_tarea }
+3. "get_project_tasks": Obtiene todas las tareas y estado de un proyecto específico (o de todos si no se indica).
+   args: { "projectId": id_opcional, "projectName": "nombre_opcional" }
+4. "get_activity_history": Consulta el historial cronológico de tareas creadas y completadas en días pasados.
+   args: { "days": 14, "type": "all|created|completed", "limit": 40 }
+5. "get_productivity_metrics": Calcula métricas avanzadas (Win Rate, Cycle Time, Racha semanal, Factor Maker vs Manager y diagnóstico completo del motor de Sugerencias).
+   args: { "monthOffset": 0 }
+6. "create_task": Crea una tarea real en el planeador del usuario (y subtareas opcionales). Úsala solo cuando el usuario pida o confirme agendar/crear una tarea.
+   args: { "title": "Título", "desc": "Descripción Markdown opcional", "pri": "high|mid|low", "due": "YYYY-MM-DD", "dueTime": "HH:MM", "cat": "clave_cat_opcional", "project": "id_proyecto_opcional", "subtasks": ["Subtarea 1", "Subtarea 2"] }
+7. "update_task_status": Modifica o marca como completada/pendiente una tarea existente por su ID.
+   args: { "taskId": id_de_la_tarea, "done": true|false, "due": "YYYY-MM-DD", "dueTime": "HH:MM", "pri": "high|mid|low", "title": "Nuevo título opcional" }
+
+Regla importante sobre herramientas:
+- Si puedes responder con precisión usando el EXTRACTO BASE EN CACHÉ de abajo, responde directamente sin invocar herramientas.
+- Si necesitas datos que no están en el extracto o el usuario pide crear/actualizar una tarea, emite el bloque <tool_call>...</tool_call> y espera el resultado del sistema antes de dar tu respuesta final.
+
+=== EXTRACTO BASE EN CACHÉ (ESTADO ACTUAL DEL USUARIO) ===
+Fecha actual: ${daysName}, ${today}
+Resumen global: ${pendingTop.length} tareas principales pendientes · ${overdueTop.length} vencidas · ${doneToday.length} completadas hoy · ${tasks.length} registros totales (incluyendo subtareas y completadas).
+${healthSummary ? healthSummary + '\n' : ''}Proyectos activos: ${projSummary}
+Categorías disponibles: ${catSummary}
+
+[TAREAS DE HOY (${todayLines.length})]:
+${todayLines.length ? todayLines.join('\n') : '(Sin tareas programadas específicamente para hoy)'}
+
+[TAREAS VENCIDAS / ATRASADAS (Mostrando ${overdueLines.length} de ${overdueTop.length})]:
+${overdueLines.length ? overdueLines.join('\n') : '(Ninguna tarea vencida)'}
+
+[PRÓXIMAS TAREAS EN LOS SIGUIENTES 7 DÍAS (Top ${upcomingLines.length})]:
+${upcomingLines.length ? upcomingLines.join('\n') : '(Sin tareas programadas para los próximos 7 días)'}`;
+
+  _aiContextCache = {
+    dateKey: today,
+    revision: _aiContextRevision,
+    ts: nowMs,
+    prompt,
+    stats: {
+      pendingCount: pendingTop.length,
+      overdueCount: overdueTop.length,
+      projectsCount: PROJECTS.length
+    }
+  };
+
+  updateAIChatContextPill(_aiContextCache.stats);
+  return prompt;
+}
+
+function updateAIChatContextPill(stats) {
+  const pillText = document.getElementById('aichat-context-pill-text');
+  if (!pillText) return;
+  const pend = stats ? stats.pendingCount : tasks.filter(t => !t.parentId && !t.done).length;
+  const over = stats ? stats.overdueCount : tasks.filter(t => !t.parentId && isTaskOverdue(t)).length;
+  pillText.textContent = `Contexto en caché: ${pend} pendiente${pend === 1 ? '' : 's'}${over > 0 ? ` (${over} vencida${over === 1 ? '' : 's'})` : ''} · ${PROJECTS.length} proyecto${PROJECTS.length === 1 ? '' : 's'} · 7 habilidades DB`;
+}
+
+/**
+ * Construye la ventana deslizante de historial de la conversación:
+ * Conserva los primeros 2 mensajes (ancla del tema), resume turnos intermedios si supera el límite
+ * y envía íntegros los últimos AI_HISTORY_RECENT_KEEP mensajes.
+ */
+function buildSlidingChatHistory(messages) {
+  const valid = (Array.isArray(messages) ? messages : []).filter(
+    m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()
+  );
+
+  if (valid.length <= AI_HISTORY_WINDOW_MAX) {
+    return valid.map(m => ({ role: m.role, content: m.content }));
+  }
+
+  const firstTwo = valid.slice(0, 2).map(m => ({ role: m.role, content: m.content }));
+  const middle = valid.slice(2, valid.length - AI_HISTORY_RECENT_KEEP);
+  const recent = valid.slice(valid.length - AI_HISTORY_RECENT_KEEP).map(m => ({ role: m.role, content: m.content }));
+
+  const middleDigest = middle.map(m => {
+    const roleLabel = m.role === 'user' ? 'Usuario' : 'Asistente';
+    const clean = m.content.replace(/\s+/g, ' ').trim();
+    const snippet = clean.length > 160 ? clean.slice(0, 157) + '...' : clean;
+    return `- ${roleLabel}: ${snippet}`;
+  }).join('\n');
+
+  const summaryMsg = {
+    role: 'user',
+    content: `[Contexto resumido de ${middle.length} mensajes intermedios de esta conversación:\n${middleDigest}\nFin del resumen intermedio. Continúa la conversación con base en los mensajes recientes:]`
+  };
+
+  return [...firstTwo, summaryMsg, ...recent];
+}
+
+/**
+ * Ejecuta cualquiera de las 7 habilidades/herramientas de la IA contra IndexedDB / memoria.
+ * Utiliza _aiToolQueryCache para lecturas repetidas dentro de la misma revisión de datos.
+ */
+async function executeAITool(toolName, rawArgs = {}) {
+  const args = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
+  const isReadOnly = ['search_tasks', 'get_task_details', 'get_project_tasks', 'get_activity_history', 'get_productivity_metrics'].includes(toolName);
+  const cacheKey = isReadOnly ? `${_aiContextRevision}:${toolName}:${JSON.stringify(args)}` : null;
+
+  if (cacheKey && _aiToolQueryCache.has(cacheKey)) {
+    return _aiToolQueryCache.get(cacheKey);
+  }
+
+  let output = null;
+
+  try {
+    if (toolName === 'search_tasks') {
+      const q = String(args.query || '').trim().toLowerCase();
+      const status = args.status || 'all';
+      const pri = args.priority || '';
+      const cat = args.category || '';
+      const projId = args.projectId !== undefined && args.projectId !== null ? String(args.projectId) : '';
+      const dateFrom = args.dateFrom || '';
+      const dateTo = args.dateTo || '';
+      const incSubs = !!args.includeSubtasks;
+      const limit = Math.min(60, Math.max(1, Number(args.limit) || 25));
+
+      let pool = tasks.filter(t => incSubs ? true : !t.parentId);
+
+      if (status === 'pending') pool = pool.filter(t => !t.done);
+      else if (status === 'done') pool = pool.filter(t => t.done);
+      else if (status === 'overdue') pool = pool.filter(t => isTaskOverdue(t));
+
+      if (pri) pool = pool.filter(t => t.pri === pri);
+      if (cat) pool = pool.filter(t => getTaskCats(t).includes(cat));
+      if (projId) {
+        pool = pool.filter(t => {
+          if (String(t.project) === projId) return true;
+          const pObj = getProjectById(Number(t.project));
+          return pObj && pObj.name.toLowerCase().includes(projId.toLowerCase());
+        });
+      }
+      if (dateFrom) pool = pool.filter(t => (t.due || t.doneAt || '') >= dateFrom);
+      if (dateTo) pool = pool.filter(t => (t.due || t.doneAt || '') <= dateTo);
+
+      if (q) {
+        pool = pool.filter(t =>
+          (t.text && t.text.toLowerCase().includes(q)) ||
+          (t.desc && t.desc.toLowerCase().includes(q))
+        );
+      }
+
+      const results = pool.slice(0, limit).map(t => ({
+        id: t.id,
+        title: t.text,
+        descPreview: t.desc ? t.desc.slice(0, 180) : '',
+        done: !!t.done,
+        doneAt: t.doneAt || null,
+        priority: t.pri || 'mid',
+        due: t.due || null,
+        dueTime: t.dueTime || null,
+        categories: getTaskCats(t).map(k => CATS[k]?.label || k),
+        project: t.project ? (getProjectById(Number(t.project))?.name || t.project) : null,
+        snoozeCount: Array.isArray(t.snoozedDates) ? t.snoozedDates.length : 0,
+        subtasksCount: getSubtasks(t.id).length
+      }));
+
+      output = {
+        badgeLabel: `🔍 Búsqueda en BD: ${results.length} tarea(s) encontrada(s)`,
+        data: { totalMatched: pool.length, returned: results.length, tasks: results }
+      };
+
+    } else if (toolName === 'get_task_details') {
+      const targetId = args.taskId;
+      const t = tasks.find(x => String(x.id) === String(targetId));
+      if (!t) {
+        output = {
+          badgeLabel: `🔍 Detalle de tarea #${targetId}: no encontrada`,
+          data: { error: `No se encontró ninguna tarea con ID ${targetId}` }
+        };
+      } else {
+        const subs = getSubtasks(t.id).map(s => ({
+          id: s.id,
+          title: s.text,
+          done: !!s.done,
+          doneAt: s.doneAt || null,
+          priority: s.pri || 'mid'
+        }));
+        output = {
+          badgeLabel: `📄 Detalle consultado: "${t.text.slice(0, 32)}"`,
+          data: {
+            id: t.id,
+            title: t.text,
+            descriptionMarkdown: t.desc || '(Sin descripción)',
+            done: !!t.done,
+            doneAt: t.doneAt || null,
+            priority: t.pri || 'mid',
+            due: t.due || null,
+            dueTime: t.dueTime || null,
+            repeat: t.repeat ? formatRepeat(t.repeat) : null,
+            categories: getTaskCats(t).map(k => CATS[k]?.label || k),
+            project: t.project ? (getProjectById(Number(t.project))?.name || null) : null,
+            snoozedDates: t.snoozedDates || [],
+            subtasks: subs
+          }
+        };
+      }
+
+    } else if (toolName === 'get_project_tasks') {
+      const pId = args.projectId;
+      const pName = String(args.projectName || '').trim().toLowerCase();
+      let targetProjects = PROJECTS;
+      if (pId !== undefined && pId !== null && pId !== '') {
+        targetProjects = PROJECTS.filter(p => String(p.id) === String(pId));
+      } else if (pName) {
+        targetProjects = PROJECTS.filter(p => p.name.toLowerCase().includes(pName));
+      }
+
+      const projectDetails = targetProjects.map(p => {
+        const pTasks = tasks.filter(t => !t.parentId && String(t.project) === String(p.id));
+        return {
+          id: p.id,
+          name: p.name,
+          description: p.desc || '',
+          totalTasks: pTasks.length,
+          pendingCount: pTasks.filter(t => !t.done).length,
+          completedCount: pTasks.filter(t => t.done).length,
+          overdueCount: pTasks.filter(t => isTaskOverdue(t)).length,
+          tasks: pTasks.slice(0, 30).map(t => ({
+            id: t.id,
+            title: t.text,
+            done: !!t.done,
+            priority: t.pri || 'mid',
+            due: t.due || null,
+            snoozeCount: Array.isArray(t.snoozedDates) ? t.snoozedDates.length : 0
+          }))
+        };
+      });
+
+      output = {
+        badgeLabel: `◫ Proyectos consultados (${projectDetails.length})`,
+        data: { projects: projectDetails }
+      };
+
+    } else if (toolName === 'get_activity_history') {
+      const days = Math.min(90, Math.max(1, Number(args.days) || 14));
+      const type = args.type || 'all';
+      const limit = Math.min(80, Math.max(1, Number(args.limit) || 40));
+      const cutoffIso = new Date(Date.now() - days * 86400000).toISOString();
+
+      const allHist = await dbGetHistory();
+      let filtered = allHist.filter(h => (h.ts || '') >= cutoffIso);
+      if (type === 'created') filtered = filtered.filter(h => h.type === 'created' || h.type === 'migrated');
+      else if (type === 'completed') filtered = filtered.filter(h => h.type === 'completed');
+
+      filtered.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+
+      output = {
+        badgeLabel: `🕒 Historial consultado (${ Math.min(limit, filtered.length) } eventos en ${days}d)`,
+        data: {
+          daysAnalyzed: days,
+          totalEvents: filtered.length,
+          events: filtered.slice(0, limit).map(h => ({
+            type: h.type,
+            taskTitle: h.taskText,
+            priority: h.taskPri || 'mid',
+            timestamp: h.ts
+          }))
+        }
+      };
+
+    } else if (toolName === 'get_productivity_metrics') {
+      const offset = Number(args.monthOffset) || 0;
+      const now = new Date();
+      const viewYear = now.getFullYear() + Math.floor((now.getMonth() + offset) / 12);
+      const viewMonth = ((now.getMonth() + offset) % 12 + 12) % 12;
+      const done = tasks.filter(t => t.done);
+      const makerCats = (await dbGetMeta('makerCategories').catch(() => null)) || [];
+
+      const winRate = calcWinRate(tasks, viewYear, viewMonth);
+      const globalCycle = calcCycleTime(done);
+      const streakInfo = calcWeekStreak(done);
+      const impact = calcImpactFactor(done, makerCats);
+      const suggestionsDiag = typeof analyzeTasksForSuggestions === 'function' ? analyzeTasksForSuggestions() : null;
+
+      output = {
+        badgeLabel: `📊 Métricas y Salud Operativa analizadas`,
+        data: {
+          month: `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`,
+          winRatePercent: winRate,
+          avgCycleTimeDays: globalCycle,
+          weeklyStreak: streakInfo.count,
+          makerImpactFactor: impact,
+          operationalHealth: suggestionsDiag ? {
+            score: suggestionsDiag.healthScore,
+            label: suggestionsDiag.healthLabel,
+            summary: suggestionsDiag.summaryText,
+            metrics: suggestionsDiag.metrics,
+            topRecommendations: suggestionsDiag.items.slice(0, 10).map(item => ({
+              id: item.task.id,
+              title: item.task.text,
+              reasonBadge: item.primaryReason.badge,
+              advice: item.advice,
+              urgencyScore: item.score
+            }))
+          } : null
+        }
+      };
+
+    } else if (toolName === 'create_task') {
+      const title = String(args.title || '').trim();
+      if (!title) {
+        output = { badgeLabel: '⚠️ Error creando tarea: falta título', data: { error: 'El campo title es obligatorio' } };
+      } else {
+        const pri = ['high', 'mid', 'low'].includes(args.pri) ? args.pri : 'mid';
+        const due = args.due ? String(args.due).trim() : todayISO();
+        const dueTime = args.dueTime ? String(args.dueTime).trim() : '';
+        const desc = args.desc ? String(args.desc).trim() : '';
+        const cats = args.cat && CATS[args.cat] ? [args.cat] : [];
+        let projId = '';
+        if (args.project) {
+          const foundProj = PROJECTS.find(
+            p => String(p.id) === String(args.project) || p.name.toLowerCase() === String(args.project).toLowerCase()
+          );
+          if (foundProj) projId = String(foundProj.id);
+        }
+
+        const newId = Date.now();
+        const newTask = {
+          id: newId,
+          text: title,
+          desc,
+          cats,
+          cat: cats[0] || '',
+          pri,
+          project: projId,
+          due,
+          origDue: due,
+          dueTime,
+          repeat: '',
+          done: false
+        };
+
+        tasks.unshift(newTask);
+        await dbPut(newTask);
+        await dbAddHistory({
+          id: Date.now() + Math.floor(Math.random() * 999),
+          type: 'created',
+          taskId: newId,
+          taskText: title,
+          taskPri: pri,
+          cats,
+          ts: new Date().toISOString()
+        });
+
+        const createdSubs = [];
+        if (Array.isArray(args.subtasks)) {
+          let offsetMs = 1;
+          for (const subTitle of args.subtasks) {
+            const cleanSub = String(subTitle || '').trim();
+            if (!cleanSub) continue;
+            const subTask = {
+              id: newId + (offsetMs++),
+              text: cleanSub,
+              done: false,
+              pri: 'mid',
+              cats,
+              cat: cats[0] || '',
+              project: projId,
+              parentId: newId
+            };
+            tasks.push(subTask);
+            await dbPut(subTask);
+            createdSubs.push(cleanSub);
+          }
+        }
+
+        markDirty();
+        render();
+
+        output = {
+          badgeLabel: `✓ Tarea creada: "${title.slice(0, 34)}"`,
+          data: {
+            success: true,
+            createdTask: { id: newId, title, pri, due, dueTime, subtasksCreated: createdSubs.length }
+          }
+        };
+      }
+
+    } else if (toolName === 'update_task_status') {
+      const t = tasks.find(x => String(x.id) === String(args.taskId));
+      if (!t) {
+        output = {
+          badgeLabel: `⚠️ Tarea #${args.taskId} no encontrada`,
+          data: { error: `No existe tarea con ID ${args.taskId}` }
+        };
+      } else {
+        if (typeof args.title === 'string' && args.title.trim()) t.text = args.title.trim();
+        if (typeof args.desc === 'string') t.desc = args.desc.trim();
+        if (['high', 'mid', 'low'].includes(args.pri)) t.pri = args.pri;
+        if (typeof args.due === 'string') {
+          t.due = args.due.trim();
+          if (!t.origDue) t.origDue = t.due;
+        }
+        if (typeof args.dueTime === 'string') t.dueTime = args.dueTime.trim();
+        if (typeof args.done === 'boolean' && args.done !== !!t.done) {
+          t.done = args.done;
+          t.doneAt = args.done ? todayISO() : null;
+          if (args.done) {
+            await dbAddHistory({
+              id: Date.now() + Math.floor(Math.random() * 999),
+              type: 'completed',
+              taskId: t.id,
+              taskText: t.text,
+              taskPri: t.pri || 'mid',
+              cats: getTaskCats(t),
+              ts: new Date().toISOString()
+            });
+          }
+        }
+
+        await dbPut(t);
+        markDirty();
+        render();
+
+        output = {
+          badgeLabel: `✓ Tarea actualizada: "${t.text.slice(0, 32)}"`,
+          data: {
+            success: true,
+            updatedTask: { id: t.id, title: t.text, done: !!t.done, due: t.due, pri: t.pri }
+          }
+        };
+      }
+    } else {
+      output = {
+        badgeLabel: `⚠️ Habilidad desconocida: ${toolName}`,
+        data: { error: `La herramienta "${toolName}" no existe.` }
+      };
+    }
+  } catch (err) {
+    console.error('Error ejecutando herramienta IA:', toolName, err);
+    output = {
+      badgeLabel: `⚠️ Error en ${toolName}`,
+      data: { error: err.message || 'Error interno al consultar IndexedDB' }
+    };
+  }
+
+  if (cacheKey && output) {
+    _aiToolQueryCache.set(cacheKey, output);
+  }
+  return output;
+}
+
+/**
+ * Obtiene la configuración del proveedor y modelo activo desde Ajustes.
+ */
+async function getActiveAIProviderConfig() {
+  const [providerRaw, orKey, orModel, gKey, gModel] = await Promise.all([
+    dbGetMeta('aiProvider'),
+    dbGetMeta('openRouterKey'),
+    dbGetMeta('openRouterModel'),
+    dbGetMeta('googleAIKey'),
+    dbGetMeta('googleAIModel')
+  ]);
+
+  const provider = providerRaw === 'googleai' || providerRaw === 'google' ? 'googleai' : 'openrouter';
+  if (provider === 'googleai') {
+    const modelRaw = (gModel || '').trim() || 'gemini-2.5-flash';
+    const cleanModel = modelRaw.startsWith('models/') ? modelRaw.slice(7) : modelRaw;
+    return {
+      provider: 'googleai',
+      providerName: 'Google AI Studio',
+      apiKey: (gKey || '').trim(),
+      model: cleanModel,
+      shortModel: cleanModel.split('/').pop()
+    };
+  } else {
+    const cleanModel = (orModel || '').trim() || 'mistralai/mistral-small-2603';
+    return {
+      provider: 'openrouter',
+      providerName: 'OpenRouter',
+      apiKey: (orKey || '').trim(),
+      model: cleanModel,
+      shortModel: cleanModel.split('/').pop()
+    };
+  }
+}
+
+/**
+ * Realiza una petición multi-turno al proveedor de IA activo (OpenRouter o Google AI Studio).
+ */
+async function callAIChatProvider(messages, systemInstruction, options = {}) {
+  const cfg = await getActiveAIProviderConfig();
+  if (!cfg.apiKey) {
+    showToast(`⚠️ Configura tu API Key de ${cfg.providerName} en Ajustes`);
+    throw new Error(`Falta configurar la API Key de ${cfg.providerName} en Ajustes → Inteligencia Artificial.`);
+  }
+
+  if (cfg.provider === 'googleai') {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent?key=${encodeURIComponent(cfg.apiKey)}`;
+    const contents = messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
+
+    const reqBody = { contents };
+    if (systemInstruction) {
+      reqBody.systemInstruction = { parts: [{ text: systemInstruction }] };
+    }
+    if (options.maxTokens) {
+      reqBody.generationConfig = { maxOutputTokens: options.maxTokens };
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      throw new Error(errData?.error?.message || `Error HTTP ${res.status} en Google AI Studio`);
+    }
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    return { text: text.trim(), provider: cfg.provider, model: cfg.model };
+
+  } else {
+    const apiMessages = [];
+    if (systemInstruction) {
+      apiMessages.push({ role: 'system', content: systemInstruction });
+    }
+    for (const m of messages) {
+      apiMessages.push({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content
+      });
+    }
+
+    const bodyObj = {
+      model: cfg.model,
+      messages: apiMessages
+    };
+    if (options.maxTokens) {
+      bodyObj.max_tokens = options.maxTokens;
+    }
+
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${cfg.apiKey}`,
+        'HTTP-Referer': window.location.href,
+        'X-Title': 'Daily Planner App',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(bodyObj)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      throw new Error(errData?.error?.message || `Error HTTP ${res.status} en OpenRouter`);
+    }
+
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    return { text: text.trim(), provider: cfg.provider, model: cfg.model };
+  }
+}
+
+/**
+ * Extrae una invocación <tool_call>{...}</tool_call> si el modelo solicitó usar una habilidad.
+ */
+function parseToolCallFromResponse(text) {
+  if (!text) return null;
+  const match = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i);
+  if (!match) return null;
+  try {
+    let rawJson = match[1].trim();
+    if (rawJson.startsWith('```')) {
+      rawJson = rawJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    }
+    const parsed = JSON.parse(rawJson);
+    if (parsed && typeof parsed.tool === 'string') {
+      return {
+        tool: parsed.tool,
+        args: parsed.args || {},
+        cleanTextBefore: text.slice(0, match.index).trim()
+      };
+    }
+  } catch (e) {
+    console.warn('No se pudo parsear <tool_call>:', e);
+  }
+  return null;
+}
+
+/**
+ * Ejecuta un turno conversacional completo incluyendo hasta 3 rondas de habilidades (Tool Calling).
+ */
+async function runAIChatTurnWithTools(chat, onToolActivity) {
+  const baseSystemPrompt = await buildAISystemContext();
+  const folder = (chat && chat.folderId) ? getAIChatFolderById(chat.folderId) : null;
+  const rawFolderContext = (folder && typeof folder.contextPrompt === 'string') ? folder.contextPrompt.trim() : '';
+  const cappedFolderContext = rawFolderContext
+    ? truncateToMaxFolderTokens(rawFolderContext, FOLDER_CONTEXT_MAX_TOKENS).text
+    : '';
+
+  const systemPrompt = cappedFolderContext
+    ? `${baseSystemPrompt}\n\n=== CONTEXTO ADICIONAL PRECARGADO DE LA CARPETA / PROYECTO «${folder.name}» ===\nEl usuario configuró el siguiente contexto permanente para todas las conversaciones asignadas a la carpeta "${folder.name}". Tómalo como conocimiento previo e instrucciones activas de antemano sin necesidad de que el usuario te lo repita:\n"""\n${cappedFolderContext}\n"""`
+    : baseSystemPrompt;
+
+  const workingMessages = buildSlidingChatHistory(chat.messages);
+  const executedTools = [];
+  let lastProviderInfo = null;
+
+  for (let round = 0; round < 3; round++) {
+    const res = await callAIChatProvider(workingMessages, systemPrompt);
+    lastProviderInfo = { provider: res.provider, model: res.model };
+
+    const toolCall = parseToolCallFromResponse(res.text);
+    if (!toolCall) {
+      return {
+        replyText: res.text || 'Sin respuesta del modelo.',
+        executedTools,
+        provider: res.provider,
+        model: res.model
+      };
+    }
+
+    if (typeof onToolActivity === 'function') {
+      onToolActivity(`Consultando habilidad: ${toolCall.tool}...`);
+    }
+
+    const toolResult = await executeAITool(toolCall.tool, toolCall.args);
+    executedTools.push({
+      tool: toolCall.tool,
+      badge: toolResult.badgeLabel
+    });
+
+    if (typeof onToolActivity === 'function') {
+      onToolActivity(toolResult.badgeLabel);
+    }
+
+    workingMessages.push({
+      role: 'assistant',
+      content: `<tool_call>${JSON.stringify({ tool: toolCall.tool, args: toolCall.args })}</tool_call>`
+    });
+    workingMessages.push({
+      role: 'user',
+      content: `[RESULTADO_HERRAMIENTA "${toolCall.tool}"]:\n${JSON.stringify(toolResult.data)}\n\nCon base en estos datos reales de la base de datos del usuario, proporciona la respuesta final en Markdown sin volver a emitir <tool_call> a menos que necesites otra consulta indispensable.`
+    });
+  }
+
+  // Última llamada directa si agotó las 3 rondas de herramientas
+  const finalRes = await callAIChatProvider(workingMessages, systemPrompt);
+  return {
+    replyText: finalRes.text.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim() || 'Consulta completada.',
+    executedTools,
+    provider: finalRes.provider || lastProviderInfo?.provider,
+    model: finalRes.model || lastProviderInfo?.model
+  };
+}
+
+/**
+ * 2ª Petición automática al modelo de IA activo para generar un título corto (3 a 6 palabras)
+ * acorde al tema de la nueva conversación.
+ */
+async function generateShortChatTitle(userFirstMessage, assistantFirstReply) {
+  const statusEl = document.getElementById('aichat-title-gen-status');
+  if (statusEl) statusEl.classList.remove('hidden');
+
+  try {
+    const titleSystem = 'Eres un generador de títulos breves para conversaciones. Devuelve ÚNICAMENTE un título corto, claro y descriptivo en español de entre 3 y 6 palabras que resuma el tema de la conversación. No uses comillas, ni puntos finales, ni prefijos como "Título:".';
+    const titlePrompt = `Mensaje del usuario: "${String(userFirstMessage).slice(0, 350)}"\nRespuesta del asistente: "${String(assistantFirstReply).slice(0, 350)}"\n\nGenera un título corto (3 a 6 palabras):`;
+
+    const res = await callAIChatProvider(
+      [{ role: 'user', content: titlePrompt }],
+      titleSystem,
+      { maxTokens: 35 }
+    );
+
+    let cleanTitle = (res.text || '')
+      .replace(/^["'«“]+|["'»”]+$/g, '')
+      .replace(/^(t[íi]tulo|tema|asunto)\s*:\s*/i, '')
+      .replace(/[.]+$/, '')
+      .replace(/\n+/g, ' ')
+      .trim();
+
+    if (cleanTitle.length > 60) {
+      cleanTitle = cleanTitle.slice(0, 57).trim() + '...';
+    }
+    return cleanTitle || null;
+  } catch (err) {
+    console.warn('No se pudo autogenerar el título del chat:', err);
+    return null;
+  } finally {
+    if (statusEl) statusEl.classList.add('hidden');
+  }
+}
+
+// ── Controladores de Interfaz del Chat con IA, Carpetas y Catálogo de 7 Habilidades ──
+
+let activeAIChatFolderFilter = 'all'; // 'all' | 'none' | folder.id
+let _pendingNewChatFolderId = null;
+let _editingChatFolderId = null;
+let _assigningFolderChatId = null;
+let _lockedFolderViewTargetId = null;
+
+const AICHAT_FOLDER_EMOJIS = ['📁', '🚀', '💼', '🧠', '📊', '🛠️', '🎯', '📚', '💡', '🔬', '🏠', '⚡', '🗂️', '📌'];
+const AICHAT_FOLDER_COLORS = [
+  { hex: '#d97706', name: 'Ámbar' },
+  { hex: '#2563eb', name: 'Azul' },
+  { hex: '#059669', name: 'Esmeralda' },
+  { hex: '#7c3aed', name: 'Violeta' },
+  { hex: '#e11d48', name: 'Carmesí' },
+  { hex: '#0891b2', name: 'Cian' },
+  { hex: '#ea580c', name: 'Naranja' },
+  { hex: '#4f46e5', name: 'Índigo' },
+  { hex: '#65a30d', name: 'Lima' },
+  { hex: '#57534e', name: 'Grafito' }
+];
+
+let _selectedChatFolderEmoji = AICHAT_FOLDER_EMOJIS[0];
+let _selectedChatFolderColor = AICHAT_FOLDER_COLORS[0].hex;
+
+const AI_CHAT_TOOLS_CATALOG = [
+  {
+    name: 'search_tasks',
+    title: 'Búsqueda Avanzada de Tareas',
+    icon: '🔍',
+    mode: 'read',
+    modeLabel: 'Lectura · Caché L3',
+    desc: 'Explora todo tu archivo de tareas (incluyendo completadas históricas y subtareas) filtrando por texto libre, estado, prioridad, categoría o proyecto.',
+    params: 'query, status ("pending" | "done" | "all"), priority ("high" | "mid" | "low"), category, projectId, limit',
+    samplePrompt: 'Usa tu herramienta search_tasks para buscar mis tareas de prioridad alta pendientes y dime cuáles tienen más urgencia.'
+  },
+  {
+    name: 'get_task_details',
+    title: 'Inspección Profunda de Tarea',
+    icon: '📄',
+    mode: 'read',
+    modeLabel: 'Lectura · Caché L3',
+    desc: 'Recupera la ficha completa de una tarea específica: notas en Markdown, árbol de subtareas, recurrencia, historial de fechas pospuestas y bitácora de eventos.',
+    params: 'taskId (ID numérico o string de la tarea)',
+    samplePrompt: 'Inspecciona en detalle mi tarea pendiente más importante usando get_task_details y sugiéreme cómo avanzar en ella.'
+  },
+  {
+    name: 'get_project_tasks',
+    title: 'Auditoría Completa de Proyecto',
+    icon: '◫',
+    mode: 'read',
+    modeLabel: 'Lectura · Caché L3',
+    desc: 'Analiza todas las tareas asociadas a un proyecto específico, calculando su porcentaje de avance, pendientes críticos y tareas completadas.',
+    params: 'projectId (ID numérico o nombre parcial del proyecto)',
+    samplePrompt: 'Revisa mis proyectos actuales con get_project_tasks y dame un reporte del proyecto que tenga más tareas pendientes.'
+  },
+  {
+    name: 'get_activity_history',
+    title: 'Bitácora de Actividad Histórica',
+    icon: '🕓',
+    mode: 'read',
+    modeLabel: 'Lectura · Caché L3',
+    desc: 'Consulta el registro cronológico de eventos en IndexedDB (tareas creadas, completadas, editadas, reabiertas o eliminadas) en una ventana de días.',
+    params: 'days (1 a 90 días), limit (máximo de eventos)',
+    samplePrompt: 'Consulta mi bitácora de los últimos 7 días con get_activity_history y resume qué avances logré esta semana.'
+  },
+  {
+    name: 'get_productivity_metrics',
+    title: 'Diagnóstico Algorítmico de Productividad',
+    icon: '📊',
+    mode: 'read',
+    modeLabel: 'Lectura · Caché L3',
+    desc: 'Ejecuta el motor de análisis de ecosistema para obtener tu Salud Operativa (0-100), balance Maker vs Manager, tasa de aplazamiento y recomendaciones.',
+    params: 'Sin parámetros requeridos',
+    samplePrompt: 'Ejecuta get_productivity_metrics para analizar mi Salud Operativa, mi balance Maker vs Manager y mis cuellos de botella.'
+  },
+  {
+    name: 'create_task',
+    title: 'Creación Directa de Tarea',
+    icon: '✨',
+    mode: 'write',
+    modeLabel: 'Escritura en BD + Sync',
+    desc: 'Registra una nueva tarea directamente en IndexedDB con título, descripción, prioridad, fecha, hora, categoría y proyecto, disparando el respaldo automático.',
+    params: 'title (obligatorio), desc, pri ("high" | "mid" | "low"), due ("YYYY-MM-DD"), dueTime ("HH:MM"), cat, projectId',
+    samplePrompt: 'Crea una tarea de prioridad media para hoy llamada "Revisar planificación semanal con el asistente IA" usando create_task.'
+  },
+  {
+    name: 'update_task_status',
+    title: 'Actualización de Estado, Fecha o Prioridad',
+    icon: '⚡',
+    mode: 'write',
+    modeLabel: 'Escritura en BD + Sync',
+    desc: 'Permite marcar una tarea como completada o pendiente, reprogramar su fecha de vencimiento o ajustar su nivel de prioridad directamente desde la conversación.',
+    params: 'taskId (obligatorio), done (boolean), due ("YYYY-MM-DD"), pri ("high" | "mid" | "low")',
+    samplePrompt: 'Revisa mis tareas vencidas y pregúntame cuáles quiero reprogramar para hoy o mañana usando update_task_status.'
+  }
+];
+
+function getAIChatFolderById(folderId) {
+  if (!folderId) return null;
+  return aiChatFolders.find(f => String(f.id) === String(folderId)) || null;
+}
+
+function getAIChatCountForFolder(folderId) {
+  if (folderId === 'all') return aiChats.length;
+  if (folderId === 'none') return aiChats.filter(c => !c.folderId || !getAIChatFolderById(c.folderId)).length;
+  return aiChats.filter(c => String(c.folderId) === String(folderId)).length;
+}
+
+async function updateAIChatModelBadge() {
+  const labelEl = document.getElementById('aichat-model-label');
+  const dotEl = document.getElementById('aichat-model-dot');
+  if (!labelEl) return;
+
+  try {
+    const cfg = await getActiveAIProviderConfig();
+    const provTag = cfg.provider === 'googleai' ? 'Gemini' : 'OpenRouter';
+    labelEl.textContent = `${provTag} · ${cfg.shortModel}`;
+    if (dotEl) {
+      dotEl.className = 'aichat-model-dot ' + (cfg.apiKey ? 'ok' : 'warn');
+    }
+  } catch (e) {
+    labelEl.textContent = 'Configurar IA';
+  }
+}
+
+function updateAIChatGreeting() {
+  const greetEl = document.getElementById('aichat-greeting');
+  if (!greetEl) return;
+  const h = new Date().getHours();
+  const timeGreeting = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
+  greetEl.textContent = `${timeGreeting}, ¿en qué nos enfocamos hoy?`;
+}
+
+function updateAIChatTotalBadge() {
+  const badge = document.getElementById('aichat-total-badge');
+  if (badge) {
+    badge.textContent = String(aiChats.length);
+  }
+}
+
+function openAIChat() {
+  if (!aiChatScreen) aiChatScreen = document.getElementById('ai-chat-screen');
+  if (!aiChatScreen) return;
+
+  aiChatScreen.classList.add('open');
+  aiChatScreen.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('aichat-fullscreen-active');
+
+  updateAIChatGreeting();
+  updateAIChatModelBadge();
+  buildAISystemContext().catch(() => {});
+  refreshAIChatUI();
+
+  if (activeAIChatTab === 'home') {
+    setTimeout(() => {
+      const input = document.getElementById('aichat-input');
+      if (input && window.innerWidth > 600) input.focus();
+    }, 150);
+  }
+}
+
+function closeAIChat() {
+  if (!aiChatScreen) aiChatScreen = document.getElementById('ai-chat-screen');
+  if (!aiChatScreen) return;
+
+  aiChatScreen.classList.remove('open');
+  aiChatScreen.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('aichat-fullscreen-active');
+}
+
+function switchAIChatTab(tabName) {
+  activeAIChatTab = tabName === 'chats' ? 'chats' : 'home';
+
+  const viewHome = document.getElementById('aichat-view-home');
+  const viewChats = document.getElementById('aichat-view-chats');
+  const tabHome = document.getElementById('aichat-tab-home');
+  const tabChats = document.getElementById('aichat-tab-chats');
+
+  if (viewHome) viewHome.classList.toggle('active', activeAIChatTab === 'home');
+  if (viewChats) viewChats.classList.toggle('active', activeAIChatTab === 'chats');
+  if (tabHome) tabHome.classList.toggle('active', activeAIChatTab === 'home');
+  if (tabChats) tabChats.classList.toggle('active', activeAIChatTab === 'chats');
+
+  if (activeAIChatTab === 'chats') {
+    renderAIChatFoldersBar();
+    renderAIChatsList();
+  } else {
+    renderActiveAIChatView();
+  }
+}
+
+function startNewAIChat() {
+  if (_isAIChatGenerating) return;
+  currentAIChatId = null;
+  // Si el usuario estaba filtrando una carpeta específica en la pestaña Chats, pre-asignar esa carpeta al nuevo chat
+  if (
+    activeAIChatTab === 'chats' &&
+    activeAIChatFolderFilter !== 'all' &&
+    activeAIChatFolderFilter !== 'none' &&
+    getAIChatFolderById(activeAIChatFolderFilter)
+  ) {
+    _pendingNewChatFolderId = activeAIChatFolderFilter;
+  } else {
+    _pendingNewChatFolderId = null;
+  }
+  switchAIChatTab('home');
+  renderActiveAIChatView();
+  const input = document.getElementById('aichat-input');
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+    input.focus();
+  }
+}
+
+function selectAIChat(chatId) {
+  const found = aiChats.find(c => String(c.id) === String(chatId));
+  if (!found) return;
+  currentAIChatId = found.id;
+  _pendingNewChatFolderId = null;
+  switchAIChatTab('home');
+  renderActiveAIChatView(true);
+}
+
+function refreshAIChatUI(resetCurrent = false) {
+  if (resetCurrent) {
+    currentAIChatId = null;
+    _pendingNewChatFolderId = null;
+  }
+  // Verificar que el filtro de carpeta activo siga siendo válido
+  if (
+    activeAIChatFolderFilter !== 'all' &&
+    activeAIChatFolderFilter !== 'none' &&
+    !getAIChatFolderById(activeAIChatFolderFilter)
+  ) {
+    activeAIChatFolderFilter = 'all';
+  }
+  updateAIChatTotalBadge();
+  renderActiveAIChatView();
+  renderAIChatFoldersBar();
+  renderAIChatsList();
+}
+
+function updateActiveChatHeaderFolderPill(activeChat) {
+  const folderBtn = document.getElementById('aichat-active-folder-btn');
+  const iconEl = document.getElementById('aichat-active-folder-icon');
+  const labelEl = document.getElementById('aichat-active-folder-label');
+  if (!folderBtn || !iconEl || !labelEl) return;
+
+  if (!activeChat) {
+    // Si estamos por iniciar un nuevo chat con carpeta preseleccionada, mostrarla
+    const pendingFolder = _pendingNewChatFolderId ? getAIChatFolderById(_pendingNewChatFolderId) : null;
+    if (pendingFolder) {
+      const hasCtx = Boolean(pendingFolder.contextPrompt && String(pendingFolder.contextPrompt).trim());
+      const tok = hasCtx ? (pendingFolder.contextTokens || estimateFolderContextTokens(pendingFolder.contextPrompt)) : 0;
+      folderBtn.classList.remove('hidden');
+      iconEl.textContent = pendingFolder.icon || '📁';
+      labelEl.textContent = hasCtx ? `${pendingFolder.name} · 🧠` : pendingFolder.name;
+      folderBtn.title = hasCtx
+        ? `Carpeta: ${pendingFolder.name} · Contexto IA activo (${tok.toLocaleString('es-MX')} / 5,000 tokens)`
+        : `Carpeta: ${pendingFolder.name}`;
+      folderBtn.style.setProperty('--folder-accent', pendingFolder.color || 'var(--gold)');
+      folderBtn.classList.add('has-folder');
+    } else {
+      folderBtn.classList.add('hidden');
+      folderBtn.classList.remove('has-folder');
+    }
+    return;
+  }
+
+  folderBtn.classList.remove('hidden');
+  const folder = activeChat.folderId ? getAIChatFolderById(activeChat.folderId) : null;
+  if (folder) {
+    const hasCtx = Boolean(folder.contextPrompt && String(folder.contextPrompt).trim());
+    const tok = hasCtx ? (folder.contextTokens || estimateFolderContextTokens(folder.contextPrompt)) : 0;
+    iconEl.textContent = folder.icon || '📁';
+    labelEl.textContent = hasCtx ? `${folder.name} · 🧠` : folder.name;
+    folderBtn.title = hasCtx
+      ? `Carpeta: ${folder.name} · Contexto IA precargado (${tok.toLocaleString('es-MX')} / 5,000 tokens)`
+      : `Carpeta: ${folder.name} (clic para cambiar)`;
+    folderBtn.style.setProperty('--folder-accent', folder.color || 'var(--gold)');
+    folderBtn.classList.add('has-folder');
+  } else {
+    iconEl.textContent = '📁';
+    labelEl.textContent = 'Sin carpeta';
+    folderBtn.title = 'Asignar esta conversación a una carpeta';
+    folderBtn.style.removeProperty('--folder-accent');
+    folderBtn.classList.remove('has-folder');
+  }
+}
+
+function renderActiveAIChatView(scrollToBottom = false) {
+  const welcomeEl = document.getElementById('aichat-welcome');
+  const threadWrap = document.getElementById('aichat-thread-wrap');
+  const headerTitle = document.getElementById('aichat-header-title');
+  const renameTopBtn = document.getElementById('aichat-rename-active-btn');
+
+  const activeChat = currentAIChatId
+    ? aiChats.find(c => String(c.id) === String(currentAIChatId))
+    : null;
+
+  updateActiveChatHeaderFolderPill(activeChat);
+
+  if (!activeChat || !Array.isArray(activeChat.messages) || activeChat.messages.length === 0) {
+    if (welcomeEl) welcomeEl.classList.remove('hidden');
+    if (threadWrap) threadWrap.classList.add('hidden');
+    if (headerTitle) headerTitle.textContent = 'Asistente IA';
+    if (renameTopBtn) renameTopBtn.classList.add('hidden');
+    return;
+  }
+
+  if (welcomeEl) welcomeEl.classList.add('hidden');
+  if (threadWrap) threadWrap.classList.remove('hidden');
+  if (headerTitle) headerTitle.textContent = activeChat.title || 'Nueva conversación';
+  if (renameTopBtn) renameTopBtn.classList.remove('hidden');
+
+  renderAIChatMessages(activeChat, scrollToBottom);
+}
+
+function formatChatTimestamp(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatChatCardDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const iso = formatISODateLocal(d);
+  const today = todayISO();
+  const timeStr = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+  if (iso === today) return `Hoy · ${timeStr}`;
+  if (iso === addDays(today, -1)) return `Ayer · ${timeStr}`;
+  return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) + ` · ${timeStr}`;
+}
+
+function renderAIChatMessages(chat, scrollToBottom = false) {
+  const listEl = document.getElementById('aichat-messages-list');
+  if (!listEl) return;
+
+  const msgsHtml = (chat.messages || []).map((m, idx) => {
+    const isUser = m.role === 'user';
+    const timeStr = formatChatTimestamp(m.ts);
+
+    if (isUser) {
+      return `
+        <div class="aichat-msg aichat-msg-user">
+          <div class="aichat-bubble aichat-bubble-user">
+            <div class="aichat-user-text">${escHtml(m.content).replace(/\n/g, '<br>')}</div>
+            ${timeStr ? `<div class="aichat-msg-time">${timeStr}</div>` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      const toolsHtml = Array.isArray(m.tools) && m.tools.length
+        ? `<div class="aichat-tools-used">${m.tools.map(t => `<span class="aichat-tool-pill">${escHtml(t.badge || t.tool)}</span>`).join('')}</div>`
+        : '';
+
+      const modelBadge = m.model
+        ? `<span class="aichat-msg-model">${escHtml(String(m.model).split('/').pop())}</span>`
+        : '';
+
+      return `
+        <div class="aichat-msg aichat-msg-assistant">
+          <div class="aichat-avatar-assistant" title="Asistente IA">✦</div>
+          <div class="aichat-bubble aichat-bubble-assistant">
+            ${toolsHtml}
+            <div class="aichat-assistant-md md-content">${renderMd(m.content)}</div>
+            <div class="aichat-msg-footer">
+              <div class="aichat-msg-meta">
+                ${modelBadge}
+                ${timeStr ? `<span class="aichat-msg-time">${timeStr}</span>` : ''}
+              </div>
+              <button type="button" class="aichat-copy-btn" data-copy-idx="${idx}" title="Copiar respuesta">
+                📋 Copiar
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  }).join('');
+
+  listEl.innerHTML = msgsHtml;
+
+  // Wire copy buttons
+  listEl.querySelectorAll('[data-copy-idx]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.copyIdx);
+      const msg = chat.messages[idx];
+      if (!msg || !msg.content) return;
+      navigator.clipboard.writeText(msg.content).then(() => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '✓ Copiado';
+        setTimeout(() => { btn.innerHTML = orig; }, 1600);
+      }).catch(() => showToast('No se pudo copiar el texto'));
+    });
+  });
+
+  if (scrollToBottom) {
+    const wrap = document.getElementById('aichat-thread-wrap');
+    if (wrap) {
+      requestAnimationFrame(() => {
+        wrap.scrollTop = wrap.scrollHeight;
+      });
+    }
+  }
+}
+
+function appendThinkingIndicator(statusText = 'Analizando y generando respuesta...') {
+  const listEl = document.getElementById('aichat-messages-list');
+  const wrap = document.getElementById('aichat-thread-wrap');
+  if (!listEl) return;
+
+  let existing = document.getElementById('aichat-thinking-row');
+  if (!existing) {
+    existing = document.createElement('div');
+    existing.id = 'aichat-thinking-row';
+    existing.className = 'aichat-msg aichat-msg-assistant aichat-thinking-row';
+    listEl.appendChild(existing);
+  }
+
+  existing.innerHTML = `
+    <div class="aichat-avatar-assistant aichat-avatar-pulse">✦</div>
+    <div class="aichat-bubble aichat-bubble-assistant aichat-bubble-thinking">
+      <div class="aichat-dots"><span></span><span></span><span></span></div>
+      <span class="aichat-thinking-label" id="aichat-thinking-label">${escHtml(statusText)}</span>
+    </div>
+  `;
+
+  if (wrap) {
+    requestAnimationFrame(() => {
+      wrap.scrollTop = wrap.scrollHeight;
+    });
+  }
+}
+
+function removeThinkingIndicator() {
+  const el = document.getElementById('aichat-thinking-row');
+  if (el) el.remove();
+}
+
+/**
+ * Envía un mensaje del usuario, genera primero la respuesta de la IA (con soporte de herramientas)
+ * y, si es una nueva conversación, lanza al final la 2ª petición para autogenerar el título corto.
+ */
+async function sendAIChatMessage(prefilledText = null) {
+  if (_isAIChatGenerating) return;
+
+  const input = document.getElementById('aichat-input');
+  const rawText = prefilledText !== null ? String(prefilledText) : (input ? input.value : '');
+  const text = rawText.trim();
+  if (!text) return;
+
+  if (input && prefilledText === null) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+
+  const sendBtn = document.getElementById('aichat-send-btn');
+  _isAIChatGenerating = true;
+  if (sendBtn) sendBtn.disabled = true;
+
+  const nowTs = Date.now();
+  let chat = currentAIChatId
+    ? aiChats.find(c => String(c.id) === String(currentAIChatId))
+    : null;
+
+  const isBrandNewChat = !chat;
+
+  if (!chat) {
+    const fallbackTitle = text.length > 42 ? text.slice(0, 39).trim() + '...' : text;
+    const assignedFolder = (_pendingNewChatFolderId && getAIChatFolderById(_pendingNewChatFolderId))
+      ? _pendingNewChatFolderId
+      : null;
+    chat = {
+      id: 'chat_' + nowTs + '_' + Math.floor(Math.random() * 1000),
+      title: fallbackTitle,
+      titleGenerated: false,
+      customTitle: false,
+      folderId: assignedFolder,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      messages: []
+    };
+    _pendingNewChatFolderId = null;
+    aiChats.unshift(chat);
+    currentAIChatId = chat.id;
+  }
+
+  // 1. Agregar mensaje del usuario y persistir inmediatamente
+  chat.messages.push({
+    role: 'user',
+    content: text,
+    ts: nowTs
+  });
+  chat.updatedAt = Date.now();
+  aiChats.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+  await dbPutChat(chat);
+  markDirty();
+  updateAIChatTotalBadge();
+  renderActiveAIChatView(true);
+  renderAIChatFoldersBar();
+  appendThinkingIndicator('Procesando con tu IA...');
+
+  try {
+    // 2. Primera petición: Generar la respuesta del asistente (con acceso a herramientas DB)
+    const turnResult = await runAIChatTurnWithTools(chat, (toolStatus) => {
+      const lbl = document.getElementById('aichat-thinking-label');
+      if (lbl) lbl.textContent = toolStatus;
+    });
+
+    removeThinkingIndicator();
+
+    const assistantMsg = {
+      role: 'assistant',
+      content: turnResult.replyText,
+      ts: Date.now(),
+      provider: turnResult.provider,
+      model: turnResult.model,
+      tools: turnResult.executedTools
+    };
+
+    chat.messages.push(assistantMsg);
+    chat.provider = turnResult.provider;
+    chat.model = turnResult.model;
+    chat.updatedAt = Date.now();
+
+    await dbPutChat(chat);
+    markDirty();
+    renderActiveAIChatView(true);
+    renderAIChatFoldersBar();
+    renderAIChatsList();
+
+    // 3. Segunda petición (solo en conversación nueva y si el usuario no renombró el chat manualmente):
+    // Solicitar al modelo de IA un título corto acorde al tema tratado.
+    if ((isBrandNewChat || !chat.titleGenerated) && !chat.customTitle && chat.messages.length >= 2) {
+      const firstUser = chat.messages.find(m => m.role === 'user')?.content || text;
+      const generatedTitle = await generateShortChatTitle(firstUser, turnResult.replyText);
+
+      // Verificar que el chat siga existiendo y no haya sido renombrado manualmente mientras tanto
+      const currentRef = aiChats.find(c => String(c.id) === String(chat.id));
+      if (currentRef && !currentRef.customTitle && generatedTitle) {
+        currentRef.title = generatedTitle;
+        currentRef.titleGenerated = true;
+        currentRef.updatedAt = Date.now();
+        await dbPutChat(currentRef);
+        markDirty();
+
+        if (String(currentAIChatId) === String(currentRef.id)) {
+          const headerTitle = document.getElementById('aichat-header-title');
+          if (headerTitle) headerTitle.textContent = currentRef.title;
+        }
+        renderAIChatsList();
+      }
+    }
+
+  } catch (err) {
+    removeThinkingIndicator();
+    console.error('Error en conversación IA:', err);
+    chat.messages.push({
+      role: 'assistant',
+      content: `⚠️ **No se pudo completar la respuesta:** ${err.message || 'Verifica tu conexión y tu clave de API en Ajustes.'}`,
+      ts: Date.now()
+    });
+    chat.updatedAt = Date.now();
+    await dbPutChat(chat);
+    markDirty();
+    renderActiveAIChatView(true);
+  } finally {
+    _isAIChatGenerating = false;
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+/**
+ * Renderiza la barra horizontal de carpetas en la pestaña "Chats".
+ */
+function renderAIChatFoldersBar() {
+  const barEl = document.getElementById('aichat-folders-bar');
+  if (!barEl) return;
+
+  const totalAll = getAIChatCountForFolder('all');
+  const totalNone = getAIChatCountForFolder('none');
+
+  let html = `
+    <button type="button" class="aichat-folder-pill ${activeAIChatFolderFilter === 'all' ? 'active' : ''}" data-folder-filter="all">
+      <span class="aichat-folder-pill-icon">🗂️</span>
+      <span class="aichat-folder-pill-name">Todas</span>
+      <span class="aichat-folder-pill-count">${totalAll}</span>
+    </button>
+    <button type="button" class="aichat-folder-pill ${activeAIChatFolderFilter === 'none' ? 'active' : ''}" data-folder-filter="none">
+      <span class="aichat-folder-pill-icon">💬</span>
+      <span class="aichat-folder-pill-name">Sin carpeta</span>
+      <span class="aichat-folder-pill-count">${totalNone}</span>
+    </button>
+  `;
+
+  for (const folder of aiChatFolders) {
+    const count = getAIChatCountForFolder(folder.id);
+    const isActive = String(activeAIChatFolderFilter) === String(folder.id);
+    const hasCtx = Boolean(folder.contextPrompt && String(folder.contextPrompt).trim());
+    const tok = hasCtx ? (folder.contextTokens || estimateFolderContextTokens(folder.contextPrompt)) : 0;
+    const pillTitle = hasCtx
+      ? `Carpeta «${folder.name}» · Contexto IA precargado (${tok.toLocaleString('es-MX')} tokens)`
+      : `Filtrar por carpeta «${folder.name}»`;
+    html += `
+      <button
+        type="button"
+        class="aichat-folder-pill custom-folder ${isActive ? 'active' : ''}"
+        data-folder-filter="${escHtml(String(folder.id))}"
+        style="--folder-accent:${escHtml(folder.color || '#d97706')}"
+        title="${escHtml(pillTitle)}"
+      >
+        <span class="aichat-folder-pill-dot" style="background:${escHtml(folder.color || '#d97706')}"></span>
+        <span class="aichat-folder-pill-icon">${escHtml(folder.icon || '📁')}</span>
+        <span class="aichat-folder-pill-name">${escHtml(folder.name)}</span>
+        ${hasCtx ? '<span class="aichat-folder-pill-ctx" title="Contexto IA precargado">🧠</span>' : ''}
+        <span class="aichat-folder-pill-count">${count}</span>
+      </button>
+    `;
+  }
+
+  html += `
+    <button type="button" class="aichat-folder-pill aichat-folder-pill-add" id="aichat-quick-add-folder-pill" title="Crear nueva carpeta">
+      <span>＋</span>
+      <span>Nueva carpeta</span>
+    </button>
+  `;
+
+  barEl.innerHTML = html;
+
+  barEl.querySelectorAll('[data-folder-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeAIChatFolderFilter = btn.dataset.folderFilter;
+      renderAIChatFoldersBar();
+      renderAIChatsList();
+    });
+  });
+
+  const addPill = document.getElementById('aichat-quick-add-folder-pill');
+  if (addPill) {
+    addPill.addEventListener('click', () => {
+      openAIChatFoldersModal(true);
+    });
+  }
+}
+
+/**
+ * Renderiza la lista de conversaciones en la pestaña inferior "Chats" aplicando filtro de carpeta y búsqueda.
+ */
+function renderAIChatsList() {
+  const listEl = document.getElementById('aichat-chats-list');
+  if (!listEl) return;
+
+  updateAIChatTotalBadge();
+
+  const q = aiChatSearchQuery.trim().toLowerCase();
+  let filtered = [...aiChats].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+
+  // 1. Filtrar por carpeta seleccionada
+  if (activeAIChatFolderFilter === 'none') {
+    filtered = filtered.filter(c => !c.folderId || !getAIChatFolderById(c.folderId));
+  } else if (activeAIChatFolderFilter !== 'all') {
+    filtered = filtered.filter(c => String(c.folderId) === String(activeAIChatFolderFilter));
+  }
+
+  // 2. Filtrar por consulta de búsqueda (título, nombre de carpeta o contenido de mensajes)
+  if (q) {
+    filtered = filtered.filter(c => {
+      const inTitle = (c.title || '').toLowerCase().includes(q);
+      const folderObj = c.folderId ? getAIChatFolderById(c.folderId) : null;
+      const inFolder = folderObj ? (folderObj.name || '').toLowerCase().includes(q) : false;
+      const inMsgs = Array.isArray(c.messages) && c.messages.some(m => (m.content || '').toLowerCase().includes(q));
+      return inTitle || inFolder || inMsgs;
+    });
+  }
+
+  if (filtered.length === 0) {
+    const activeFolderObj = (activeAIChatFolderFilter !== 'all' && activeAIChatFolderFilter !== 'none')
+      ? getAIChatFolderById(activeAIChatFolderFilter)
+      : null;
+
+    const emptyTitle = q
+      ? 'Sin resultados para tu búsqueda'
+      : activeFolderObj
+      ? `La carpeta "${activeFolderObj.name}" está vacía`
+      : activeAIChatFolderFilter === 'none'
+      ? 'No hay conversaciones sin carpeta'
+      : 'Aún no tienes conversaciones guardadas';
+
+    const emptySub = q
+      ? 'Intenta con otra palabra clave o cambia el filtro de carpeta.'
+      : activeFolderObj
+      ? 'Puedes mover conversaciones existentes a esta carpeta con el botón 📁 o iniciar un nuevo chat aquí.'
+      : 'Inicia una nueva conversación desde la pestaña Inicio para analizar tus tareas o resolver cualquier duda.';
+
+    listEl.innerHTML = `
+      <div class="aichat-empty-chats">
+        <div class="aichat-empty-icon">${activeFolderObj ? escHtml(activeFolderObj.icon || '📁') : '💬'}</div>
+        <div class="aichat-empty-title">${escHtml(emptyTitle)}</div>
+        <div class="aichat-empty-sub">${escHtml(emptySub)}</div>
+      </div>
+    `;
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(c => {
+    const isCurrent = String(c.id) === String(currentAIChatId);
+    const msgCount = Array.isArray(c.messages) ? c.messages.length : 0;
+    const lastMsg = msgCount > 0 ? c.messages[msgCount - 1] : null;
+    const rawPreview = lastMsg ? String(lastMsg.content || '').replace(/[#*`>_~]/g, '').replace(/\s+/g, ' ').trim() : 'Sin mensajes';
+    const preview = rawPreview.length > 110 ? rawPreview.slice(0, 107) + '...' : rawPreview;
+    const dateLabel = formatChatCardDate(c.updatedAt || c.createdAt);
+    const modelShort = c.model ? String(c.model).split('/').pop() : '';
+    const titleBadge = c.customTitle
+      ? '<span class="aichat-card-badge custom" title="Título personalizado">Personalizado</span>'
+      : c.titleGenerated
+      ? '<span class="aichat-card-badge auto" title="Título autogenerado por IA">✦ Auto</span>'
+      : '';
+
+    const folderObj = c.folderId ? getAIChatFolderById(c.folderId) : null;
+    const hasFolderCtx = Boolean(folderObj && folderObj.contextPrompt && String(folderObj.contextPrompt).trim());
+    const folderTok = hasFolderCtx ? (folderObj.contextTokens || estimateFolderContextTokens(folderObj.contextPrompt)) : 0;
+    const folderBadgeHtml = folderObj
+      ? `<span class="aichat-card-folder-badge" style="--folder-accent:${escHtml(folderObj.color || '#d97706')}" title="${escHtml(hasFolderCtx ? `Carpeta: ${folderObj.name} · Contexto IA activo (${folderTok.toLocaleString('es-MX')} tokens)` : `Carpeta: ${folderObj.name}`)}">
+          <span>${escHtml(folderObj.icon || '📁')}</span>
+          <span>${escHtml(folderObj.name)}${hasFolderCtx ? ' · 🧠' : ''}</span>
+         </span>`
+      : '';
+
+    return `
+      <div class="aichat-chat-card ${isCurrent ? 'active-chat' : ''}" data-chat-open="${escHtml(String(c.id))}">
+        <div class="aichat-chat-card-main">
+          <div class="aichat-chat-card-top">
+            <span class="aichat-chat-card-title">${escHtml(c.title || 'Conversación sin título')}</span>
+            ${folderBadgeHtml}
+            ${titleBadge}
+          </div>
+          <div class="aichat-chat-card-preview">${escHtml(preview)}</div>
+          <div class="aichat-chat-card-meta">
+            <span>${dateLabel}</span>
+            <span>·</span>
+            <span>${msgCount} mensaje${msgCount === 1 ? '' : 's'}</span>
+            ${modelShort ? `<span>·</span><span class="aichat-chat-card-model">${escHtml(modelShort)}</span>` : ''}
+          </div>
+        </div>
+        <div class="aichat-chat-card-actions">
+          <button type="button" class="aichat-card-act-btn folder" data-chat-folder="${escHtml(String(c.id))}" title="Asignar o cambiar carpeta">📁</button>
+          <button type="button" class="aichat-card-act-btn edit" data-chat-rename="${escHtml(String(c.id))}" title="Renombrar conversación">✎</button>
+          <button type="button" class="aichat-card-act-btn del" data-chat-delete="${escHtml(String(c.id))}" title="Eliminar conversación">🗑</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Wire click to open conversation
+  listEl.querySelectorAll('[data-chat-open]').forEach(card => {
+    card.addEventListener('click', e => {
+      if (
+        e.target.closest('[data-chat-folder]') ||
+        e.target.closest('[data-chat-rename]') ||
+        e.target.closest('[data-chat-delete]')
+      ) return;
+      selectAIChat(card.dataset.chatOpen);
+    });
+  });
+
+  // Wire folder assignment buttons
+  listEl.querySelectorAll('[data-chat-folder]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openAssignFolderModal(btn.dataset.chatFolder);
+    });
+  });
+
+  // Wire rename buttons
+  listEl.querySelectorAll('[data-chat-rename]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openRenameChatModal(btn.dataset.chatRename);
+    });
+  });
+
+  // Wire delete buttons
+  listEl.querySelectorAll('[data-chat-delete]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openDeleteChatModal(btn.dataset.chatDelete);
+    });
+  });
+}
+
+// ── Sistema Completo de Gestión de Carpetas de Chat IA y Casos Límite ──
+
+function updateFolderContextTokenMeter() {
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  const counterEl = document.getElementById('aichat-folder-context-counter');
+  const fillEl = document.getElementById('aichat-folder-context-fill');
+  if (!ctxIn) return 0;
+
+  const tokens = estimateFolderContextTokens(ctxIn.value);
+  const pct = Math.min(100, Math.round((tokens / FOLDER_CONTEXT_MAX_TOKENS) * 1000) / 10);
+  const isAtLimit = tokens >= FOLDER_CONTEXT_MAX_TOKENS;
+  const isNearLimit = !isAtLimit && tokens >= FOLDER_CONTEXT_MAX_TOKENS * 0.85;
+
+  if (counterEl) {
+    counterEl.textContent = `${tokens.toLocaleString('es-MX')} / ${FOLDER_CONTEXT_MAX_TOKENS.toLocaleString('es-MX')} tokens`;
+    counterEl.classList.toggle('near-limit', isNearLimit);
+    counterEl.classList.toggle('at-limit', isAtLimit);
+  }
+
+  if (fillEl) {
+    fillEl.style.width = `${pct}%`;
+    fillEl.classList.toggle('near-limit', isNearLimit);
+    fillEl.classList.toggle('at-limit', isAtLimit);
+  }
+
+  return tokens;
+}
+
+function handleFolderContextInput() {
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  if (!ctxIn) return;
+
+  const currentTokens = estimateFolderContextTokens(ctxIn.value);
+  if (currentTokens > FOLDER_CONTEXT_MAX_TOKENS) {
+    const capped = truncateToMaxFolderTokens(ctxIn.value, FOLDER_CONTEXT_MAX_TOKENS);
+    ctxIn.value = capped.text;
+    showFolderFormError(`Se alcanzó el límite máximo de ${FOLDER_CONTEXT_MAX_TOKENS.toLocaleString('es-MX')} tokens de contexto por carpeta. El texto excedente fue recortado.`);
+  } else {
+    const errEl = document.getElementById('aichat-folder-form-error');
+    if (errEl && errEl.textContent.includes('límite máximo')) {
+      showFolderFormError('');
+    }
+  }
+
+  updateFolderContextTokenMeter();
+  updateFolderFormPreview();
+}
+
+function updateFolderFormPreview() {
+  const nameIn = document.getElementById('aichat-folder-name-input');
+  const iconIn = document.getElementById('aichat-folder-icon-input');
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  const prevPill = document.getElementById('aichat-folder-preview-pill');
+  const prevIcon = document.getElementById('aichat-folder-preview-icon');
+  const prevName = document.getElementById('aichat-folder-preview-name');
+
+  const rawName = nameIn ? nameIn.value.trim() : '';
+  const rawIcon = (iconIn ? iconIn.value.trim() : '') || _selectedChatFolderEmoji || '📁';
+  const hasCtx = Boolean(ctxIn && ctxIn.value.trim());
+
+  if (prevIcon) prevIcon.textContent = rawIcon;
+  if (prevName) prevName.textContent = (rawName || 'Vista previa') + (hasCtx ? ' · 🧠' : '');
+  if (prevPill) {
+    prevPill.style.setProperty('--folder-accent', _selectedChatFolderColor);
+  }
+}
+
+function showFolderFormError(msg) {
+  const errEl = document.getElementById('aichat-folder-form-error');
+  if (!errEl) return;
+  if (!msg) {
+    errEl.textContent = '';
+    errEl.classList.add('hidden');
+  } else {
+    errEl.textContent = msg;
+    errEl.classList.remove('hidden');
+  }
+}
+
+function hideFolderLockBanner() {
+  _lockedFolderViewTargetId = null;
+  const banner = document.getElementById('aichat-folder-lock-banner');
+  if (banner) banner.classList.add('hidden');
+}
+
+function resetAIChatFolderForm() {
+  _editingChatFolderId = null;
+  _selectedChatFolderEmoji = AICHAT_FOLDER_EMOJIS[0];
+  _selectedChatFolderColor = AICHAT_FOLDER_COLORS[0].hex;
+
+  const titleEl = document.getElementById('aichat-folder-form-title');
+  const nameIn = document.getElementById('aichat-folder-name-input');
+  const iconIn = document.getElementById('aichat-folder-icon-input');
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  const saveBtn = document.getElementById('aichat-folder-save-btn');
+  const cancelEditBtn = document.getElementById('aichat-folder-cancel-edit-btn');
+
+  if (titleEl) titleEl.textContent = 'Nueva carpeta';
+  if (nameIn) nameIn.value = '';
+  if (iconIn) iconIn.value = _selectedChatFolderEmoji;
+  if (ctxIn) ctxIn.value = '';
+  if (saveBtn) saveBtn.textContent = 'Crear carpeta';
+  if (cancelEditBtn) cancelEditBtn.classList.add('hidden');
+
+  showFolderFormError('');
+  syncFolderPickersSelection();
+  updateFolderContextTokenMeter();
+  updateFolderFormPreview();
+}
+
+function syncFolderPickersSelection() {
+  const emojiGrid = document.getElementById('aichat-folder-emoji-grid');
+  const colorGrid = document.getElementById('aichat-folder-color-grid');
+  if (emojiGrid) {
+    emojiGrid.querySelectorAll('[data-folder-emoji]').forEach(b => {
+      b.classList.toggle('selected', b.dataset.folderEmoji === _selectedChatFolderEmoji);
+    });
+  }
+  if (colorGrid) {
+    colorGrid.querySelectorAll('[data-folder-color]').forEach(b => {
+      b.classList.toggle('selected', b.dataset.folderColor === _selectedChatFolderColor);
+    });
+  }
+}
+
+function startEditAIChatFolder(folderId) {
+  const folder = getAIChatFolderById(folderId);
+  if (!folder) return;
+
+  hideFolderLockBanner();
+  _editingChatFolderId = folder.id;
+  _selectedChatFolderEmoji = folder.icon || '📁';
+  _selectedChatFolderColor = folder.color || AICHAT_FOLDER_COLORS[0].hex;
+
+  const titleEl = document.getElementById('aichat-folder-form-title');
+  const nameIn = document.getElementById('aichat-folder-name-input');
+  const iconIn = document.getElementById('aichat-folder-icon-input');
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  const saveBtn = document.getElementById('aichat-folder-save-btn');
+  const cancelEditBtn = document.getElementById('aichat-folder-cancel-edit-btn');
+
+  if (titleEl) titleEl.textContent = `Editando carpeta «${folder.name}»`;
+  if (nameIn) nameIn.value = folder.name;
+  if (iconIn) iconIn.value = _selectedChatFolderEmoji;
+  if (ctxIn) ctxIn.value = folder.contextPrompt || '';
+  if (saveBtn) saveBtn.textContent = 'Guardar cambios';
+  if (cancelEditBtn) cancelEditBtn.classList.remove('hidden');
+
+  showFolderFormError('');
+  syncFolderPickersSelection();
+  updateFolderContextTokenMeter();
+  updateFolderFormPreview();
+  if (nameIn) nameIn.focus();
+}
+
+async function saveAIChatFolder() {
+  const nameIn = document.getElementById('aichat-folder-name-input');
+  const iconIn = document.getElementById('aichat-folder-icon-input');
+  const ctxIn = document.getElementById('aichat-folder-context-input');
+  const rawName = (nameIn ? nameIn.value : '').replace(/\s+/g, ' ').trim();
+  const rawIcon = Array.from((iconIn ? iconIn.value.trim() : '') || _selectedChatFolderEmoji || '📁').slice(0, 2).join('') || '📁';
+  const rawContext = (ctxIn ? ctxIn.value : '').trim();
+
+  // Caso límite 1: Nombre vacío
+  if (!rawName) {
+    showFolderFormError('Escribe un nombre para la carpeta.');
+    if (nameIn) nameIn.focus();
+    return;
+  }
+
+  // Caso límite 2: Nombres reservados del sistema
+  const norm = normalizeSearchText(rawName);
+  if (norm === 'todas' || norm === 'sin carpeta' || norm === 'all' || norm === 'none') {
+    showFolderFormError('Ese nombre está reservado para los filtros predeterminados.');
+    if (nameIn) nameIn.focus();
+    return;
+  }
+
+  // Caso límite 3: Nombre duplicado (insensible a mayúsculas/acentos)
+  const duplicate = aiChatFolders.find(f =>
+    normalizeSearchText(f.name) === norm &&
+    (!_editingChatFolderId || String(f.id) !== String(_editingChatFolderId))
+  );
+  if (duplicate) {
+    showFolderFormError(`Ya existe una carpeta llamada "${duplicate.name}". Elige un nombre distinto.`);
+    if (nameIn) nameIn.focus();
+    return;
+  }
+
+  // Caso límite 4: Validar y acotar el contexto precargado a máximo 5,000 tokens
+  const cappedContext = rawContext
+    ? truncateToMaxFolderTokens(rawContext, FOLDER_CONTEXT_MAX_TOKENS)
+    : { text: '', tokens: 0, truncated: false };
+
+  const nowTs = Date.now();
+
+  if (_editingChatFolderId) {
+    const existing = getAIChatFolderById(_editingChatFolderId);
+    if (existing) {
+      existing.name = rawName;
+      existing.icon = rawIcon;
+      existing.color = _selectedChatFolderColor;
+      existing.contextPrompt = cappedContext.text;
+      existing.contextTokens = cappedContext.tokens;
+      existing.updatedAt = nowTs;
+      await dbPutChatFolder(existing);
+      markDirty();
+      showToast(
+        cappedContext.tokens > 0
+          ? `✓ Carpeta actualizada (${cappedContext.tokens.toLocaleString('es-MX')} tokens de contexto IA)`
+          : '✓ Carpeta actualizada'
+      );
+    }
+  } else {
+    const newFolder = {
+      id: 'folder_' + nowTs + '_' + Math.floor(Math.random() * 1000),
+      name: rawName,
+      icon: rawIcon,
+      color: _selectedChatFolderColor,
+      contextPrompt: cappedContext.text,
+      contextTokens: cappedContext.tokens,
+      createdAt: nowTs,
+      updatedAt: nowTs
+    };
+    aiChatFolders.push(newFolder);
+    await dbPutChatFolder(newFolder);
+    markDirty();
+    showToast(
+      cappedContext.tokens > 0
+        ? `✓ Carpeta "${rawName}" creada con ${cappedContext.tokens.toLocaleString('es-MX')} tokens de contexto`
+        : `✓ Carpeta "${rawName}" creada`
+    );
+  }
+
+  resetAIChatFolderForm();
+  renderAIChatFoldersManageList();
+  refreshAIChatUI();
+}
+
+/**
+ * Caso límite crítico: Bloquear el borrado de una carpeta si contiene al menos un chat.
+ */
+async function attemptDeleteAIChatFolder(folderId) {
+  const folder = getAIChatFolderById(folderId);
+  if (!folder) return;
+
+  const chatsInFolder = aiChats.filter(c => String(c.folderId) === String(folder.id));
+
+  if (chatsInFolder.length > 0) {
+    // BLOQUEAR BORRADO: Mostrar banner de protección con detalles y acción rápida
+    _lockedFolderViewTargetId = folder.id;
+    const banner = document.getElementById('aichat-folder-lock-banner');
+    const titleEl = document.getElementById('aichat-folder-lock-title');
+    const descEl = document.getElementById('aichat-folder-lock-desc');
+
+    const countText = chatsInFolder.length === 1
+      ? '1 conversación activa'
+      : `${chatsInFolder.length} conversaciones activas`;
+
+    if (titleEl) {
+      titleEl.textContent = `No se puede eliminar la carpeta «${folder.name}»`;
+    }
+    if (descEl) {
+      descEl.textContent = `Esta carpeta contiene ${countText}. Para proteger tu historial, debes mover o eliminar sus conversaciones antes de poder borrar la carpeta.`;
+    }
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    showToast(`🛡️ Borrado bloqueado: «${folder.name}» contiene ${countText}`);
+    return;
+  }
+
+  // La carpeta está vacía (0 chats): proceder con la eliminación limpia
+  hideFolderLockBanner();
+  if (String(_editingChatFolderId) === String(folder.id)) {
+    resetAIChatFolderForm();
+  }
+
+  aiChatFolders = aiChatFolders.filter(f => String(f.id) !== String(folder.id));
+  await dbDeleteChatFolder(folder.id);
+
+  if (String(activeAIChatFolderFilter) === String(folder.id)) {
+    activeAIChatFolderFilter = 'all';
+  }
+  if (String(_pendingNewChatFolderId) === String(folder.id)) {
+    _pendingNewChatFolderId = null;
+  }
+
+  markDirty();
+  renderAIChatFoldersManageList();
+  refreshAIChatUI();
+  showToast(`🗑 Carpeta «${folder.name}» eliminada`);
+}
+
+function renderAIChatFoldersManageList() {
+  const listEl = document.getElementById('aichat-folders-manage-list');
+  const countLabel = document.getElementById('aichat-folders-count-label');
+  if (!listEl) return;
+
+  if (countLabel) {
+    countLabel.textContent = `${aiChatFolders.length} carpeta${aiChatFolders.length === 1 ? '' : 's'}`;
+  }
+
+  if (aiChatFolders.length === 0) {
+    listEl.innerHTML = `
+      <div class="aichat-folders-empty">
+        Aún no has creado carpetas personalizadas. Usa el formulario superior para crear la primera.
+      </div>
+    `;
+    return;
+  }
+
+  listEl.innerHTML = aiChatFolders.map(f => {
+    const count = getAIChatCountForFolder(f.id);
+    const isProtected = count > 0;
+    const countBadge = count === 0
+      ? '<span class="aichat-fitem-count empty">Vacía · 0 chats</span>'
+      : `<span class="aichat-fitem-count has-chats" title="Protegida contra borrado mientras contenga chats">🛡️ ${count} chat${count === 1 ? '' : 's'}</span>`;
+
+    const hasCtx = Boolean(f.contextPrompt && String(f.contextPrompt).trim());
+    const tok = hasCtx ? (f.contextTokens || estimateFolderContextTokens(f.contextPrompt)) : 0;
+    const ctxBadge = hasCtx
+      ? `<span class="aichat-fitem-context-badge" title="Contexto precargado automático para la IA (${tok.toLocaleString('es-MX')} / 5,000 tokens)">🧠 ${tok.toLocaleString('es-MX')} tok</span>`
+      : '<span class="aichat-fitem-context-badge empty">Sin contexto IA</span>';
+
+    const cleanSnippet = hasCtx
+      ? String(f.contextPrompt).replace(/\s+/g, ' ').trim()
+      : '';
+    const ctxSnippetHtml = cleanSnippet
+      ? `<div class="aichat-fitem-context-snippet" title="${escHtml(cleanSnippet)}">${escHtml(cleanSnippet.length > 95 ? cleanSnippet.slice(0, 92) + '...' : cleanSnippet)}</div>`
+      : '';
+
+    return `
+      <div class="aichat-folder-manage-item" style="--folder-accent:${escHtml(f.color || '#d97706')}">
+        <div class="aichat-fitem-left">
+          <span class="aichat-fitem-swatch" style="background:${escHtml(f.color || '#d97706')}">
+            ${escHtml(f.icon || '📁')}
+          </span>
+          <div class="aichat-fitem-info">
+            <span class="aichat-fitem-name">${escHtml(f.name)}</span>
+            <div class="aichat-fitem-badges-row">
+              ${countBadge}
+              ${ctxBadge}
+            </div>
+            ${ctxSnippetHtml}
+          </div>
+        </div>
+        <div class="aichat-fitem-actions">
+          <button type="button" class="aichat-card-act-btn edit" data-fmanage-edit="${escHtml(String(f.id))}" title="Editar nombre, ícono, color o contexto precargado">✎</button>
+          <button
+            type="button"
+            class="aichat-card-act-btn del ${isProtected ? 'locked-del' : ''}"
+            data-fmanage-del="${escHtml(String(f.id))}"
+            title="${isProtected ? 'Contiene chats: haz clic para ver aviso de protección' : 'Eliminar carpeta vacía'}"
+          >${isProtected ? '🔒' : '🗑'}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.querySelectorAll('[data-fmanage-edit]').forEach(btn => {
+    btn.addEventListener('click', () => startEditAIChatFolder(btn.dataset.fmanageEdit));
+  });
+
+  listEl.querySelectorAll('[data-fmanage-del]').forEach(btn => {
+    btn.addEventListener('click', () => attemptDeleteAIChatFolder(btn.dataset.fmanageDel));
+  });
+}
+
+function openAIChatFoldersModal(focusNameInput = false) {
+  const modal = document.getElementById('aichat-folders-modal');
+  if (!modal) return;
+  hideFolderLockBanner();
+  resetAIChatFolderForm();
+  renderAIChatFoldersManageList();
+  modal.classList.remove('hidden');
+
+  if (focusNameInput) {
+    setTimeout(() => {
+      const nameIn = document.getElementById('aichat-folder-name-input');
+      if (nameIn) nameIn.focus();
+    }, 60);
+  }
+}
+
+function closeAIChatFoldersModal() {
+  hideFolderLockBanner();
+  const modal = document.getElementById('aichat-folders-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// ── Modal para Asignar o Mover un Chat a una Carpeta ──
+
+function openAssignFolderModal(chatId) {
+  const chat = aiChats.find(c => String(c.id) === String(chatId));
+  if (!chat) return;
+  _assigningFolderChatId = chat.id;
+
+  const modal = document.getElementById('aichat-assign-folder-modal');
+  const subtitle = document.getElementById('aichat-assign-folder-subtitle');
+  const listEl = document.getElementById('aichat-assign-folder-list');
+  if (!modal || !listEl) return;
+
+  if (subtitle) {
+    subtitle.textContent = `Conversación: «${chat.title || 'Sin título'}»`;
+  }
+
+  const currentFolderId = chat.folderId && getAIChatFolderById(chat.folderId) ? String(chat.folderId) : '';
+
+  let html = `
+    <button type="button" class="aichat-assign-option ${!currentFolderId ? 'selected' : ''}" data-assign-folder="">
+      <span class="aichat-assign-opt-left">
+        <span class="aichat-assign-opt-icon">💬</span>
+        <span class="aichat-assign-opt-name">Sin carpeta (General)</span>
+      </span>
+      <span class="aichat-assign-opt-check">${!currentFolderId ? '✓ Actual' : ''}</span>
+    </button>
+  `;
+
+  for (const f of aiChatFolders) {
+    const isSel = currentFolderId === String(f.id);
+    const hasCtx = Boolean(f.contextPrompt && String(f.contextPrompt).trim());
+    const tok = hasCtx ? (f.contextTokens || estimateFolderContextTokens(f.contextPrompt)) : 0;
+    html += `
+      <button
+        type="button"
+        class="aichat-assign-option ${isSel ? 'selected' : ''}"
+        data-assign-folder="${escHtml(String(f.id))}"
+        style="--folder-accent:${escHtml(f.color || '#d97706')}"
+      >
+        <span class="aichat-assign-opt-left">
+          <span class="aichat-assign-opt-dot" style="background:${escHtml(f.color || '#d97706')}"></span>
+          <span class="aichat-assign-opt-icon">${escHtml(f.icon || '📁')}</span>
+          <span class="aichat-assign-opt-name">${escHtml(f.name)}</span>
+          ${hasCtx ? `<span class="aichat-fitem-context-badge" title="Inyecta contexto IA automáticamente">🧠 ${tok.toLocaleString('es-MX')} tok</span>` : ''}
+        </span>
+        <span class="aichat-assign-opt-check">${isSel ? '✓ Actual' : ''}</span>
+      </button>
+    `;
+  }
+
+  listEl.innerHTML = html;
+
+  listEl.querySelectorAll('[data-assign-folder]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetFolderId = btn.dataset.assignFolder || null;
+      assignChatToFolder(_assigningFolderChatId, targetFolderId);
+    });
+  });
+
+  modal.classList.remove('hidden');
+}
+
+function closeAssignFolderModal() {
+  _assigningFolderChatId = null;
+  const modal = document.getElementById('aichat-assign-folder-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function assignChatToFolder(chatId, folderId) {
+  const chat = aiChats.find(c => String(c.id) === String(chatId));
+  if (!chat) return;
+
+  const validFolder = folderId ? getAIChatFolderById(folderId) : null;
+  chat.folderId = validFolder ? validFolder.id : null;
+  chat.updatedAt = Date.now();
+
+  await dbPutChat(chat);
+  markDirty();
+  closeAssignFolderModal();
+  refreshAIChatUI();
+
+  if (validFolder) {
+    showToast(`📁 Movido a «${validFolder.name}»`);
+  } else {
+    showToast('💬 Conversación movida a Sin carpeta');
+  }
+}
+
+// ── Modal Inspector de las 7 Herramientas (Habilidades DB) ──
+
+function openAIChatToolsModal() {
+  const modal = document.getElementById('aichat-tools-modal');
+  if (!modal) return;
+  renderAIChatToolsCatalog();
+  modal.classList.remove('hidden');
+}
+
+function closeAIChatToolsModal() {
+  const modal = document.getElementById('aichat-tools-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function renderAIChatToolsCatalog() {
+  const bannerEl = document.getElementById('aichat-tools-cache-banner');
+  const gridEl = document.getElementById('aichat-tools-catalog-list');
+  if (!gridEl) return;
+
+  if (bannerEl) {
+    const cacheActive = !!_aiContextCache;
+    const totalTasksCount = tasks.filter(t => !t.parentId).length;
+    const toolCacheEntries = _aiToolQueryCache.size;
+    bannerEl.innerHTML = `
+      <div class="aichat-tcache-item">
+        <span class="aichat-tcache-dot ${cacheActive ? 'ok' : ''}"></span>
+        <div>
+          <div class="aichat-tcache-label">Extracto Base (Caché L1 + KV Prefix L2)</div>
+          <div class="aichat-tcache-val">${cacheActive ? `Sincronizado · Rev #${_aiContextRevision}` : 'Listo para generar al enviar'} · ${totalTasksCount} tareas</div>
+        </div>
+      </div>
+      <div class="aichat-tcache-item">
+        <span class="aichat-tcache-dot ok"></span>
+        <div>
+          <div class="aichat-tcache-label">Memoria Conversacional Deslizante</div>
+          <div class="aichat-tcache-val">Ventana de ${AI_HISTORY_WINDOW_MAX} mensajes + compresión automática</div>
+        </div>
+      </div>
+      <div class="aichat-tcache-item">
+        <span class="aichat-tcache-dot ok"></span>
+        <div>
+          <div class="aichat-tcache-label">Caché de Consultas DB (L3)</div>
+          <div class="aichat-tcache-val">${toolCacheEntries} consulta${toolCacheEntries === 1 ? '' : 's'} en memoria · Hasta 3 rondas/turno</div>
+        </div>
+      </div>
+    `;
+  }
+
+  gridEl.innerHTML = AI_CHAT_TOOLS_CATALOG.map((tool, idx) => `
+    <div class="aichat-tool-spec-card">
+      <div class="aichat-tool-spec-top">
+        <div class="aichat-tool-spec-id">
+          <span class="aichat-tool-spec-icon">${tool.icon}</span>
+          <div>
+            <div class="aichat-tool-spec-title">${escHtml(tool.title)}</div>
+            <code class="aichat-tool-spec-code">${escHtml(tool.name)}</code>
+          </div>
+        </div>
+        <span class="aichat-tool-spec-badge ${tool.mode}">${escHtml(tool.modeLabel)}</span>
+      </div>
+      <p class="aichat-tool-spec-desc">${escHtml(tool.desc)}</p>
+      <div class="aichat-tool-spec-params">
+        <strong>Parámetros:</strong> <code>${escHtml(tool.params)}</code>
+      </div>
+      <div class="aichat-tool-spec-footer">
+        <button type="button" class="aichat-tool-try-btn" data-try-tool-idx="${idx}">
+          <span>⚡</span> Probar habilidad en el chat
+        </button>
+      </div>
+    </div>
+  `).join('');
+
+  gridEl.querySelectorAll('[data-try-tool-idx]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.tryToolIdx);
+      const spec = AI_CHAT_TOOLS_CATALOG[idx];
+      if (!spec) return;
+      closeAIChatToolsModal();
+      switchAIChatTab('home');
+      const input = document.getElementById('aichat-input');
+      if (input) {
+        input.value = spec.samplePrompt;
+        input.style.height = 'auto';
+        input.style.height = Math.min(150, input.scrollHeight) + 'px';
+        input.focus();
+      }
+      showToast(`🛠️ Prompt cargado para probar «${spec.name}»`);
+    });
+  });
+}
+
+// ── Modales de Renombrado y Eliminación de Conversación ──
+
+function openRenameChatModal(chatId) {
+  const chat = aiChats.find(c => String(c.id) === String(chatId));
+  if (!chat) return;
+  _renamingChatId = chat.id;
+  const modal = document.getElementById('aichat-rename-modal');
+  const input = document.getElementById('aichat-rename-input');
+  if (!modal || !input) return;
+
+  input.value = chat.title || '';
+  modal.classList.remove('hidden');
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 60);
+}
+
+function closeRenameChatModal() {
+  _renamingChatId = null;
+  const modal = document.getElementById('aichat-rename-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function confirmRenameChat() {
+  if (!_renamingChatId) return;
+  const input = document.getElementById('aichat-rename-input');
+  const newTitle = input ? input.value.trim() : '';
+  if (!newTitle) {
+    showToast('✏️ Escribe un nombre para la conversación');
+    if (input) input.focus();
+    return;
+  }
+
+  const chat = aiChats.find(c => String(c.id) === String(_renamingChatId));
+  if (chat) {
+    chat.title = newTitle;
+    chat.customTitle = true;
+    chat.updatedAt = Date.now();
+    await dbPutChat(chat);
+    markDirty();
+    renderActiveAIChatView();
+    renderAIChatsList();
+    showToast('✓ Nombre de la conversación actualizado');
+  }
+  closeRenameChatModal();
+}
+
+function openDeleteChatModal(chatId) {
+  const chat = aiChats.find(c => String(c.id) === String(chatId));
+  if (!chat) return;
+  _deletingChatId = chat.id;
+  const modal = document.getElementById('aichat-delete-modal');
+  const desc = document.getElementById('aichat-delete-modal-desc');
+  if (desc) {
+    desc.textContent = `¿Seguro que deseas eliminar la conversación "${chat.title || 'Sin título'}"? Esta acción no se puede deshacer.`;
+  }
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeDeleteChatModal() {
+  _deletingChatId = null;
+  const modal = document.getElementById('aichat-delete-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function confirmDeleteChat() {
+  if (!_deletingChatId) return;
+  const targetId = _deletingChatId;
+  closeDeleteChatModal();
+
+  aiChats = aiChats.filter(c => String(c.id) !== String(targetId));
+  await dbDeleteChat(targetId);
+
+  if (String(currentAIChatId) === String(targetId)) {
+    currentAIChatId = null;
+  }
+
+  markDirty();
+  refreshAIChatUI();
+  showToast('🗑 Conversación eliminada');
+}
+
+function initAIChat() {
+  aiChatScreen = document.getElementById('ai-chat-screen');
+  if (!aiChatScreen) return;
+
+  // Botón en el menú desplegable flotante (FAB)
+  const navBtn = document.querySelector('.nav-fab-item[data-nav="chat-ia"]');
+  if (navBtn) {
+    navBtn.addEventListener('click', () => {
+      closeNav();
+      openAIChat();
+    });
+  }
+
+  // Botón volver a Tareas
+  const backBtn = document.getElementById('aichat-back-btn');
+  if (backBtn) backBtn.addEventListener('click', closeAIChat);
+
+  // Botón de modelo activo → abre Ajustes en la sección de IA
+  const modelPill = document.getElementById('aichat-model-pill');
+  if (modelPill) {
+    modelPill.addEventListener('click', () => {
+      openSettings();
+      const aiSec = document.getElementById('ai-provider-group');
+      if (aiSec) {
+        setTimeout(() => aiSec.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
+      }
+    });
+  }
+
+  // Botones estratégicos para abrir el Inspector de las 7 Herramientas DB
+  const openToolsTopBtn = document.getElementById('aichat-open-tools-btn');
+  const openToolsWelcomeBtn = document.getElementById('aichat-welcome-tools-btn');
+  const openToolsComposerBtn = document.getElementById('aichat-composer-tools-btn');
+  const closeToolsBtn = document.getElementById('aichat-tools-modal-close');
+  const doneToolsBtn = document.getElementById('aichat-tools-modal-done');
+  const toolsModal = document.getElementById('aichat-tools-modal');
+
+  if (openToolsTopBtn) openToolsTopBtn.addEventListener('click', openAIChatToolsModal);
+  if (openToolsWelcomeBtn) openToolsWelcomeBtn.addEventListener('click', openAIChatToolsModal);
+  if (openToolsComposerBtn) openToolsComposerBtn.addEventListener('click', openAIChatToolsModal);
+  if (closeToolsBtn) closeToolsBtn.addEventListener('click', closeAIChatToolsModal);
+  if (doneToolsBtn) doneToolsBtn.addEventListener('click', closeAIChatToolsModal);
+  if (toolsModal) {
+    toolsModal.addEventListener('click', e => { if (e.target === toolsModal) closeAIChatToolsModal(); });
+  }
+
+  // Botones de "+ Nuevo chat"
+  const newBtnTop = document.getElementById('aichat-new-chat-btn');
+  if (newBtnTop) newBtnTop.addEventListener('click', startNewAIChat);
+
+  const newBtnList = document.getElementById('aichat-new-from-list-btn');
+  if (newBtnList) newBtnList.addEventListener('click', startNewAIChat);
+
+  // Botón de renombrar en la barra superior
+  const renameTopBtn = document.getElementById('aichat-rename-active-btn');
+  if (renameTopBtn) {
+    renameTopBtn.addEventListener('click', () => {
+      if (currentAIChatId) openRenameChatModal(currentAIChatId);
+    });
+  }
+
+  // Píldora de carpeta activa en la barra superior
+  const activeFolderBtn = document.getElementById('aichat-active-folder-btn');
+  if (activeFolderBtn) {
+    activeFolderBtn.addEventListener('click', () => {
+      if (currentAIChatId) {
+        openAssignFolderModal(currentAIChatId);
+      } else {
+        openAIChatFoldersModal(false);
+      }
+    });
+  }
+
+  // Inicializar selectores de Emojis y Colores del Gestor de Carpetas
+  const emojiGrid = document.getElementById('aichat-folder-emoji-grid');
+  const colorGrid = document.getElementById('aichat-folder-color-grid');
+  const folderNameIn = document.getElementById('aichat-folder-name-input');
+  const folderIconIn = document.getElementById('aichat-folder-icon-input');
+
+  if (emojiGrid) {
+    emojiGrid.innerHTML = AICHAT_FOLDER_EMOJIS.map(em => `
+      <button type="button" class="aichat-picker-emoji-btn ${em === _selectedChatFolderEmoji ? 'selected' : ''}" data-folder-emoji="${em}">${em}</button>
+    `).join('');
+    emojiGrid.addEventListener('click', e => {
+      const btn = e.target.closest('[data-folder-emoji]');
+      if (!btn) return;
+      _selectedChatFolderEmoji = btn.dataset.folderEmoji;
+      if (folderIconIn) folderIconIn.value = _selectedChatFolderEmoji;
+      syncFolderPickersSelection();
+      updateFolderFormPreview();
+    });
+  }
+
+  if (colorGrid) {
+    colorGrid.innerHTML = AICHAT_FOLDER_COLORS.map(c => `
+      <button type="button" class="aichat-picker-color-btn ${c.hex === _selectedChatFolderColor ? 'selected' : ''}" data-folder-color="${c.hex}" style="background:${c.hex}" title="${c.name}"></button>
+    `).join('');
+    colorGrid.addEventListener('click', e => {
+      const btn = e.target.closest('[data-folder-color]');
+      if (!btn) return;
+      _selectedChatFolderColor = btn.dataset.folderColor;
+      syncFolderPickersSelection();
+      updateFolderFormPreview();
+    });
+  }
+
+  if (folderNameIn) {
+    folderNameIn.addEventListener('input', () => {
+      showFolderFormError('');
+      updateFolderFormPreview();
+    });
+    folderNameIn.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveAIChatFolder();
+      }
+    });
+  }
+
+  if (folderIconIn) {
+    folderIconIn.addEventListener('input', () => {
+      const v = folderIconIn.value.trim();
+      if (v) _selectedChatFolderEmoji = v;
+      syncFolderPickersSelection();
+      updateFolderFormPreview();
+    });
+  }
+
+  const folderContextIn = document.getElementById('aichat-folder-context-input');
+  if (folderContextIn) {
+    folderContextIn.addEventListener('input', handleFolderContextInput);
+  }
+
+  // Botones del Modal Gestor de Carpetas
+  const manageFoldersBtn = document.getElementById('aichat-manage-folders-btn');
+  const foldersModal = document.getElementById('aichat-folders-modal');
+  const foldersModalClose = document.getElementById('aichat-folders-modal-close');
+  const foldersModalDone = document.getElementById('aichat-folders-modal-done');
+  const folderSaveBtn = document.getElementById('aichat-folder-save-btn');
+  const folderCancelEditBtn = document.getElementById('aichat-folder-cancel-edit-btn');
+  const folderLockViewBtn = document.getElementById('aichat-folder-lock-view-btn');
+  const folderLockDismissBtn = document.getElementById('aichat-folder-lock-dismiss-btn');
+
+  if (manageFoldersBtn) manageFoldersBtn.addEventListener('click', () => openAIChatFoldersModal(false));
+  if (foldersModalClose) foldersModalClose.addEventListener('click', closeAIChatFoldersModal);
+  if (foldersModalDone) foldersModalDone.addEventListener('click', closeAIChatFoldersModal);
+  if (folderSaveBtn) folderSaveBtn.addEventListener('click', saveAIChatFolder);
+  if (folderCancelEditBtn) folderCancelEditBtn.addEventListener('click', resetAIChatFolderForm);
+  if (foldersModal) {
+    foldersModal.addEventListener('click', e => { if (e.target === foldersModal) closeAIChatFoldersModal(); });
+  }
+  if (folderLockDismissBtn) {
+    folderLockDismissBtn.addEventListener('click', hideFolderLockBanner);
+  }
+  if (folderLockViewBtn) {
+    folderLockViewBtn.addEventListener('click', () => {
+      const targetId = _lockedFolderViewTargetId;
+      closeAIChatFoldersModal();
+      if (targetId && getAIChatFolderById(targetId)) {
+        activeAIChatFolderFilter = targetId;
+        switchAIChatTab('chats');
+        renderAIChatFoldersBar();
+        renderAIChatsList();
+      }
+    });
+  }
+
+  // Modal de Asignar Carpeta a un Chat
+  const assignModal = document.getElementById('aichat-assign-folder-modal');
+  const assignClose = document.getElementById('aichat-assign-folder-close');
+  const assignCancel = document.getElementById('aichat-assign-folder-cancel');
+  const assignNewFolderBtn = document.getElementById('aichat-assign-new-folder-btn');
+
+  if (assignClose) assignClose.addEventListener('click', closeAssignFolderModal);
+  if (assignCancel) assignCancel.addEventListener('click', closeAssignFolderModal);
+  if (assignModal) {
+    assignModal.addEventListener('click', e => { if (e.target === assignModal) closeAssignFolderModal(); });
+  }
+  if (assignNewFolderBtn) {
+    assignNewFolderBtn.addEventListener('click', () => {
+      closeAssignFolderModal();
+      openAIChatFoldersModal(true);
+    });
+  }
+
+  // Tarjetas de inicio rápido (Starters)
+  document.querySelectorAll('.aichat-starter-card[data-starter]').forEach(card => {
+    card.addEventListener('click', () => {
+      const promptText = card.dataset.starter;
+      if (promptText) sendAIChatMessage(promptText);
+    });
+  });
+
+  // Textarea auto-ajustable y envío con Enter
+  const input = document.getElementById('aichat-input');
+  const sendBtn = document.getElementById('aichat-send-btn');
+
+  if (input) {
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(150, input.scrollHeight) + 'px';
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAIChatMessage();
+      }
+    });
+  }
+  if (sendBtn) {
+    sendBtn.addEventListener('click', () => sendAIChatMessage());
+  }
+
+  // Pestañas inferiores (Inicio / Chats)
+  document.querySelectorAll('.aichat-bnav-tab[data-aichat-tab]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      switchAIChatTab(tab.dataset.aichatTab);
+    });
+  });
+
+  // Buscador de conversaciones en la pestaña Chats
+  const searchIn = document.getElementById('aichat-search-input');
+  const searchClear = document.getElementById('aichat-search-clear');
+  if (searchIn) {
+    searchIn.addEventListener('input', () => {
+      aiChatSearchQuery = searchIn.value;
+      if (searchClear) searchClear.classList.toggle('hidden', !aiChatSearchQuery);
+      renderAIChatsList();
+    });
+  }
+  if (searchClear) {
+    searchClear.addEventListener('click', () => {
+      aiChatSearchQuery = '';
+      if (searchIn) searchIn.value = '';
+      searchClear.classList.add('hidden');
+      renderAIChatsList();
+    });
+  }
+
+  // Modal de renombrar
+  const renCancel = document.getElementById('aichat-rename-cancel');
+  const renSave = document.getElementById('aichat-rename-save');
+  const renInput = document.getElementById('aichat-rename-input');
+  const renModal = document.getElementById('aichat-rename-modal');
+  if (renCancel) renCancel.addEventListener('click', closeRenameChatModal);
+  if (renSave) renSave.addEventListener('click', confirmRenameChat);
+  if (renInput) {
+    renInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); confirmRenameChat(); }
+      if (e.key === 'Escape') { e.stopPropagation(); closeRenameChatModal(); }
+    });
+  }
+  if (renModal) {
+    renModal.addEventListener('click', e => { if (e.target === renModal) closeRenameChatModal(); });
+  }
+
+  // Modal de eliminar
+  const delCancel = document.getElementById('aichat-delete-cancel');
+  const delConfirm = document.getElementById('aichat-delete-confirm');
+  const delModal = document.getElementById('aichat-delete-modal');
+  if (delCancel) delCancel.addEventListener('click', closeDeleteChatModal);
+  if (delConfirm) delConfirm.addEventListener('click', confirmDeleteChat);
+  if (delModal) {
+    delModal.addEventListener('click', e => { if (e.target === delModal) closeDeleteChatModal(); });
+  }
+
+  updateAIChatTotalBadge();
+  updateAIChatModelBadge();
+  renderAIChatFoldersBar();
+}
+
+window.openAIChat = openAIChat;
+window.closeAIChat = closeAIChat;
+

@@ -23,7 +23,7 @@ export function handleSearch() {
     searchTimeout = setTimeout(() => {
         state.searchQuery = query;
         refreshNotesView();
-    }, 250);
+    }, 150);
 }
 
 export function clearSearchInput() {

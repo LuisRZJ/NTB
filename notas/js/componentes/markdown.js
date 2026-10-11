@@ -1,7 +1,9 @@
 const markdownCache = new Map();
+const cardMarkdownCache = new Map();
 
 export function clearMarkdownCache() {
     markdownCache.clear();
+    cardMarkdownCache.clear();
 }
 
 export function renderMarkdown(text) {
@@ -21,7 +23,35 @@ export function renderMarkdown(text) {
     html = parseBlockquote(html);
     html = parseCodeBlocks(html);
     html = parseLineBreaks(html);
+    if (markdownCache.size > 1000) {
+        markdownCache.clear();
+    }
     markdownCache.set(text, html);
+    return html;
+}
+
+export function renderCardMarkdown(text, maxChars = 600, maxLines = 10) {
+    if (!text) return '';
+    if (cardMarkdownCache.has(text)) {
+        return cardMarkdownCache.get(text);
+    }
+
+    let source = text.length > maxChars ? text.slice(0, maxChars) : text;
+    const lines = source.split('\n');
+    if (lines.length > maxLines) {
+        source = lines.slice(0, maxLines).join('\n');
+    }
+
+    const fenceMatches = source.match(/```/g);
+    if (fenceMatches && fenceMatches.length % 2 !== 0) {
+        source += '\n```';
+    }
+
+    const html = renderMarkdown(source);
+    if (cardMarkdownCache.size > 1000) {
+        cardMarkdownCache.clear();
+    }
+    cardMarkdownCache.set(text, html);
     return html;
 }
 

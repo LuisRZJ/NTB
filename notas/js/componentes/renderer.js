@@ -3,18 +3,28 @@ import { saveNotesToStorage } from './storage.js';
 import { toggleLayoutStyles } from './layout.js';
 import { showToast } from './toast.js';
 import { updateBadgesCounts } from './badges.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, renderCardMarkdown } from './markdown.js';
 
 let activeOtherNotes = [];
 let currentLimit = 24;
 const BATCH_SIZE = 24;
 let isScrollHandlerAttached = false;
+let lastRenderedDateLabel = null;
+
+const shortDateFormatter = new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' });
+const fullDateFormatter = new Intl.DateTimeFormat('es-ES', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+});
+const groupDateFormatter = new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
 
 export function formatDate(timestamp) {
     if (!timestamp) return '';
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
+    const nowMs = Date.now();
+    const diffMs = nowMs - timestamp;
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
@@ -24,40 +34,36 @@ export function formatDate(timestamp) {
     if (diffHours < 24) return `Hace ${diffHours} h`;
     if (diffDays < 7) return `Hace ${diffDays} días`;
 
-    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+    return shortDateFormatter.format(new Date(timestamp));
 }
 
 export function formatFullDate(timestamp) {
     if (!timestamp) return '';
-    const date = new Date(timestamp);
-    return date.toLocaleDateString('es-ES', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
+    return fullDateFormatter.format(new Date(timestamp));
 }
 
 export function isToday(timestamp) {
     const date = new Date(timestamp);
     const today = new Date();
-    return date.toDateString() === today.toDateString();
+    return date.getFullYear() === today.getFullYear() &&
+        date.getMonth() === today.getMonth() &&
+        date.getDate() === today.getDate();
 }
 
 export function isYesterday(timestamp) {
     const date = new Date(timestamp);
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    return date.toDateString() === yesterday.toDateString();
+    return date.getFullYear() === yesterday.getFullYear() &&
+        date.getMonth() === yesterday.getMonth() &&
+        date.getDate() === yesterday.getDate();
 }
 
 export function getDateGroupLabel(timestamp) {
     if (!timestamp) return null;
     if (isToday(timestamp)) return 'Hoy';
     if (isYesterday(timestamp)) return 'Ayer';
-    const date = new Date(timestamp);
-    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    return groupDateFormatter.format(new Date(timestamp));
 }
 
 export function createDateSeparator(label, isPinned = false) {
@@ -142,10 +148,13 @@ export function refreshNotesView() {
 
     notesGrid.innerHTML = '';
     pinnedGrid.innerHTML = '';
+    lastRenderedDateLabel = null;
+
+    const hasQuery = state.searchQuery.trim() !== '';
+    const query = hasQuery ? state.searchQuery.toLowerCase() : '';
 
     let filtered = state.notes.filter(note => {
-        if (state.searchQuery.trim() !== '') {
-            const query = state.searchQuery.toLowerCase();
+        if (hasQuery) {
             const inTitle = note.title && note.title.toLowerCase().includes(query);
             const inContent = note.content && note.content.toLowerCase().includes(query);
             const inTags = Array.isArray(note.tags) && note.tags.some(t => t.toLowerCase().includes(query));
@@ -172,26 +181,29 @@ export function refreshNotesView() {
     let otherNotes = [];
 
     if (showPinnedHeaderSplit) {
-        pinnedNotes = filtered.filter(n => n.isPinned);
-        otherNotes = filtered.filter(n => !n.isPinned);
+        for (let i = 0; i < filtered.length; i++) {
+            const n = filtered[i];
+            if (n.isPinned) pinnedNotes.push(n);
+            else otherNotes.push(n);
+        }
     } else {
         otherNotes = filtered;
     }
 
     activeOtherNotes = otherNotes;
-    currentLimit = BATCH_SIZE;
+    currentLimit = Math.min(BATCH_SIZE, otherNotes.length);
 
     if (pinnedNotes.length > 0) {
         pinnedSection?.classList.remove('hidden');
         otherSectionTitle?.classList.remove('hidden');
-        renderNotesWithDateSeparators(pinnedGrid, pinnedNotes);
+        renderNotesWithDateSeparators(pinnedGrid, pinnedNotes, false);
     } else {
         pinnedSection?.classList.add('hidden');
         otherSectionTitle?.classList.add('hidden');
     }
 
     if (otherNotes.length > 0) {
-        renderNotesWithDateSeparators(notesGrid, otherNotes.slice(0, currentLimit));
+        renderNotesWithDateSeparators(notesGrid, otherNotes.slice(0, currentLimit), true);
     }
 
     if (filtered.length === 0) {
@@ -209,28 +221,38 @@ export function refreshNotesView() {
 
 function attachScrollLoadMore() {
     if (isScrollHandlerAttached) return;
-    window.addEventListener('scroll', () => {
-        if (state.currentTab === 'settings' || state.currentTab === 'metrics') return;
-        
-        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 500) {
-            if (currentLimit < activeOtherNotes.length) {
-                currentLimit += BATCH_SIZE;
+    const scrollContainer = document.getElementById('notes-scroll-container');
+    if (!scrollContainer) return;
+
+    let scrollTicking = false;
+    scrollContainer.addEventListener('scroll', () => {
+        if (scrollTicking) return;
+        scrollTicking = true;
+        requestAnimationFrame(() => {
+            scrollTicking = false;
+            if (state.currentTab === 'settings' || state.currentTab === 'metrics') return;
+            if (currentLimit >= activeOtherNotes.length) return;
+
+            const remaining = scrollContainer.scrollHeight - (scrollContainer.scrollTop + scrollContainer.clientHeight);
+            if (remaining <= 450) {
+                const prevLimit = currentLimit;
+                currentLimit = Math.min(currentLimit + BATCH_SIZE, activeOtherNotes.length);
                 const notesGrid = document.getElementById('notes-grid');
-                if (notesGrid) {
-                    notesGrid.innerHTML = '';
-                    renderNotesWithDateSeparators(notesGrid, activeOtherNotes.slice(0, currentLimit));
+                if (notesGrid && currentLimit > prevLimit) {
+                    appendNotesWithDateSeparators(notesGrid, activeOtherNotes.slice(prevLimit, currentLimit));
                 }
             }
-        }
-    });
+        });
+    }, { passive: true });
     isScrollHandlerAttached = true;
 }
 
-export function renderNotesWithDateSeparators(container, notes) {
+export function renderNotesWithDateSeparators(container, notes, trackLastDate = false) {
     let lastDateLabel = null;
     const fragment = document.createDocumentFragment();
 
-    notes.forEach((note, index) => {
+    for (let i = 0; i < notes.length; i++) {
+        const note = notes[i];
         const currentDateLabel = getDateGroupLabel(note.createdAt);
 
         if (currentDateLabel !== lastDateLabel) {
@@ -239,8 +261,31 @@ export function renderNotesWithDateSeparators(container, notes) {
         }
 
         fragment.appendChild(createNoteCard(note));
-    });
-    
+    }
+
+    if (trackLastDate) {
+        lastRenderedDateLabel = lastDateLabel;
+    }
+
+    container.appendChild(fragment);
+}
+
+function appendNotesWithDateSeparators(container, notesSlice) {
+    if (!notesSlice || notesSlice.length === 0) return;
+    const fragment = document.createDocumentFragment();
+
+    for (let i = 0; i < notesSlice.length; i++) {
+        const note = notesSlice[i];
+        const currentDateLabel = getDateGroupLabel(note.createdAt);
+
+        if (currentDateLabel !== lastRenderedDateLabel) {
+            fragment.appendChild(createDateSeparator(currentDateLabel));
+            lastRenderedDateLabel = currentDateLabel;
+        }
+
+        fragment.appendChild(createNoteCard(note));
+    }
+
     container.appendChild(fragment);
 }
 
@@ -248,12 +293,12 @@ export function createNoteCard(note) {
     const card = document.createElement('div');
     const colorMeta = colorPalette[note.color] || colorPalette.default;
 
-    card.className = `note-card group p-5 rounded-3xl border transition-all duration-300 relative hover:shadow-md cursor-pointer flex flex-col justify-between ${colorMeta.bgLight} ${colorMeta.borderLight} ${colorMeta.bgDark} ${colorMeta.borderDark}`;
+    card.className = `note-card group p-5 rounded-3xl border relative hover:shadow-md cursor-pointer flex flex-col justify-between ${colorMeta.bgLight} ${colorMeta.borderLight} ${colorMeta.bgDark} ${colorMeta.borderDark}`;
     card.dataset.id = note.id;
 
     const pinIconColor = note.isPinned ? 'text-amber-500 fill-amber-500' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600';
     const renderedTitle = note.title ? renderMarkdown(note.title) : 'Sin Título';
-    const renderedContent = note.content ? renderMarkdown(note.content) : '';
+    const renderedContent = note.content ? renderCardMarkdown(note.content) : '';
     const createdDate = formatDate(note.createdAt);
     const wasEdited = note.updatedAt && note.updatedAt !== note.createdAt;
     const editedDate = wasEdited ? formatDate(note.updatedAt) : '';

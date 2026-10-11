@@ -10,17 +10,32 @@ const DEFAULT_LABELS = [
 const DB_NAME = 'GoogleKeepNotesDB';
 const DB_VERSION = 2;
 
+let dbInstancePromise = null;
+
 function openDB() {
-    return new Promise((resolve, reject) => {
+    if (dbInstancePromise) {
+        return dbInstancePromise;
+    }
+
+    dbInstancePromise = new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
 
         request.onerror = (event) => {
             console.error('IndexedDB error:', event.target.error);
+            dbInstancePromise = null;
             reject(event.target.error);
         };
 
         request.onsuccess = (event) => {
-            resolve(event.target.result);
+            const db = event.target.result;
+            db.onversionchange = () => {
+                db.close();
+                dbInstancePromise = null;
+            };
+            db.onclose = () => {
+                dbInstancePromise = null;
+            };
+            resolve(db);
         };
 
         request.onupgradeneeded = (event) => {
@@ -36,6 +51,8 @@ function openDB() {
             }
         };
     });
+
+    return dbInstancePromise;
 }
 
 export function saveNotesToStorage() {
@@ -52,13 +69,11 @@ export function saveNotesToStorage() {
         };
 
         transaction.oncomplete = () => {
-            db.close();
             updateBadgesCounts();
         };
 
         transaction.onerror = (e) => {
             console.error('Error saving notes to IndexedDB:', e.target.error);
-            db.close();
         };
     }).catch(err => {
         console.error('Error opening DB for saving notes:', err);
@@ -79,13 +94,8 @@ export function saveLabelsToStorage() {
             });
         };
 
-        transaction.oncomplete = () => {
-            db.close();
-        };
-
         transaction.onerror = (e) => {
             console.error('Error saving labels to IndexedDB:', e.target.error);
-            db.close();
         };
     }).catch(err => {
         console.error('Error opening DB for saving labels:', err);
@@ -128,6 +138,7 @@ export function loadLabelsFromStorage() {
                         }
                     }
                     setLabelsList([...DEFAULT_LABELS]);
+                    saveLabelsToStorage();
                     resolve();
                 }
             };
@@ -136,10 +147,6 @@ export function loadLabelsFromStorage() {
                 console.error('Error loading labels from IndexedDB:', e.target.error);
                 setLabelsList([...DEFAULT_LABELS]);
                 resolve();
-            };
-
-            transaction.oncomplete = () => {
-                db.close();
             };
         }).catch(err => {
             console.error('Error opening DB for loading labels:', err);
@@ -160,6 +167,7 @@ export function loadNotesFromStorage() {
                 const results = request.result;
                 if (results && results.length > 0) {
                     let notes = results;
+                    let needsMigrationSave = false;
                     notes.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
                     notes.forEach(note => {
                         if (!note.history) note.history = [];
@@ -169,9 +177,13 @@ export function loadNotesFromStorage() {
                         if (!Array.isArray(note.tags)) {
                             note.tags = (typeof note.label === 'string' && note.label) ? [note.label] : [];
                             delete note.label;
+                            needsMigrationSave = true;
                         }
                     });
                     state.notes = notes;
+                    if (needsMigrationSave) {
+                        saveNotesToStorage();
+                    }
                     resolve();
                 } else {
                     // Intentar migrar desde localStorage
@@ -192,6 +204,7 @@ export function loadNotesFromStorage() {
                         }
                     }
                     state.notes = getDefaultNotes();
+                    saveNotesToStorage();
                     resolve();
                 }
             };
@@ -200,10 +213,6 @@ export function loadNotesFromStorage() {
                 console.error('Error loading notes from IndexedDB:', e.target.error);
                 state.notes = getDefaultNotes();
                 resolve();
-            };
-
-            transaction.oncomplete = () => {
-                db.close();
             };
         }).catch(err => {
             console.error('Error opening DB for loading notes:', err);
@@ -261,8 +270,6 @@ function getDefaultNotes() {
 export async function initializeNotes() {
     await loadNotesFromStorage();
     await loadLabelsFromStorage();
-    saveNotesToStorage();
-    saveLabelsToStorage();
 }
 
 // ── Métodos de Configuración (Config Store) ─────────────────
@@ -286,8 +293,6 @@ export function getConfig(key) {
             request.onerror = (event) => {
                 reject(event.target.error);
             };
-
-            transaction.oncomplete = () => db.close();
         }).catch(reject);
     });
 }
@@ -312,8 +317,6 @@ export function saveConfig(key, value) {
             request.onerror = (event) => {
                 reject(event.target.error);
             };
-
-            transaction.oncomplete = () => db.close();
         }).catch(reject);
     });
 }

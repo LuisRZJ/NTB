@@ -5,11 +5,22 @@ body {
 
 .material-symbols-outlined {
     font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    transition: font-variation-settings 0.2s ease;
 }
 
 .active .material-symbols-outlined {
     font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+}
+
+.note-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 180px;
+    contain: layout style paint;
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+#notes-scroll-container {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
 }
 
 ::-webkit-scrollbar {
@@ -43,13 +54,12 @@ body {
     white-space: nowrap;
     animation: marquee 8s linear infinite;
     animation-play-state: paused;
-    will-change: transform;
 }
 
 .label-marquee-container:hover .label-marquee,
-.label-marquee-container:focus .label-marquee,
-.touch-device .label-marquee {
+.label-marquee-container:focus .label-marquee {
     animation-play-state: running;
+    will-change: transform;
 }
 
 @keyframes marquee {
@@ -95,4 +105,5 @@ body {
 .sidebar-logo-link:hover {
     opacity: 0.8;
 }
+
 

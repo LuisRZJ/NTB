@@ -16,9 +16,10 @@ export function toggleLayoutStyles() {
     if (!notesGrid || !pinnedGrid) return;
 
     const baseClass = state.layoutGrid 
-        ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 transition-all duration-300"
-        : "flex flex-col gap-4 max-w-2xl mx-auto transition-all duration-300";
+        ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+        : "flex flex-col gap-4 max-w-2xl mx-auto";
 
-    notesGrid.className = baseClass;
-    pinnedGrid.className = baseClass;
+    if (notesGrid.className !== baseClass) notesGrid.className = baseClass;
+    if (pinnedGrid.className !== baseClass) pinnedGrid.className = baseClass;
 }
+

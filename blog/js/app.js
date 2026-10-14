@@ -25,6 +25,7 @@ import './componentes/labels.js';
 import './componentes/history.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
+    window._isAppInitializing = true;
     try {
         // 1. Inicializar base de datos y cargar estado inicial
         await initializePosts();
@@ -59,6 +60,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log('[BlogApp] Inicializada con éxito.');
     } catch (error) {
         console.error('[BlogApp] Error crítico durante la inicialización:', error);
+    } finally {
+        setTimeout(() => {
+            window._isAppInitializing = false;
+        }, 1000);
     }
 });
 

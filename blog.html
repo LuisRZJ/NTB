@@ -311,26 +311,35 @@
                 </div>
             </div>
 
-            <!-- Action Buttons -->
-            <div id="editor-actions" class="flex items-center gap-1">
-                <button onclick="openBackgroundDialog()" id="btn-background" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Fondo personalizado">
-                    <span class="material-symbols-outlined text-lg">palette</span>
+            <!-- Right Action Area -->
+            <div class="flex items-center gap-2">
+                <!-- Header Cloud Sync Indicator Pill -->
+                <button id="header-cloud-sync" onclick="switchSection('settings')" style="display: none;" class="items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200/50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors" title="Estado de sincronización en la nube">
+                    <span id="header-cloud-dot" class="w-2 h-2 rounded-full bg-green-500"></span>
+                    <span id="header-cloud-text">Sincronizado</span>
                 </button>
-                <button onclick="openHistoryDialog()" id="btn-history" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Historial de versiones">
-                    <span class="material-symbols-outlined text-lg">history</span>
-                </button>
-                <button onclick="toggleCurrentPostPin()" id="btn-pin" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Favorito">
-                    <span class="material-symbols-outlined text-lg" id="pin-icon">star_border</span>
-                </button>
-                <button onclick="archiveCurrentPost()" id="btn-archive" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Archivar">
-                    <span class="material-symbols-outlined text-lg" id="archive-icon">archive</span>
-                </button>
-                <button onclick="trashCurrentPost()" id="btn-trash" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Papelera">
-                    <span class="material-symbols-outlined text-lg">delete</span>
-                </button>
-                <button onclick="toggleMoreMenu(this)" id="btn-more" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Más opciones">
-                    <span class="material-symbols-outlined text-lg">more_vert</span>
-                </button>
+
+                <!-- Action Buttons -->
+                <div id="editor-actions" class="flex items-center gap-1">
+                    <button onclick="openBackgroundDialog()" id="btn-background" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Fondo personalizado">
+                        <span class="material-symbols-outlined text-lg">palette</span>
+                    </button>
+                    <button onclick="openHistoryDialog()" id="btn-history" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Historial de versiones">
+                        <span class="material-symbols-outlined text-lg">history</span>
+                    </button>
+                    <button onclick="toggleCurrentPostPin()" id="btn-pin" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Favorito">
+                        <span class="material-symbols-outlined text-lg" id="pin-icon">star_border</span>
+                    </button>
+                    <button onclick="archiveCurrentPost()" id="btn-archive" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Archivar">
+                        <span class="material-symbols-outlined text-lg" id="archive-icon">archive</span>
+                    </button>
+                    <button onclick="trashCurrentPost()" id="btn-trash" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Papelera">
+                        <span class="material-symbols-outlined text-lg">delete</span>
+                    </button>
+                    <button onclick="toggleMoreMenu(this)" id="btn-more" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors" title="Más opciones">
+                        <span class="material-symbols-outlined text-lg">more_vert</span>
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -522,6 +531,31 @@
                             <span class="material-symbols-outlined text-lg">cloud_download</span>
                             Restaurar desde la Nube
                         </button>
+                    </div>
+
+                    <!-- Modo: Sincronización continua automática -->
+                    <div class="cloud-autosync-card hidden" id="cloud-autosync-container" style="margin-top: 14px;">
+                        <div class="cloud-autosync-header">
+                            <div class="cloud-autosync-title-wrap">
+                                <span class="cloud-autosync-icon">🔄</span>
+                                <div>
+                                    <div class="cloud-autosync-title-row">
+                                        <span class="cloud-autosync-title text-slate-800 dark:text-slate-100">Sincronización continua en la nube</span>
+                                        <span class="cloud-autosync-badge" id="cloud-autosync-badge">Desactivado</span>
+                                    </div>
+                                    <div class="cloud-autosync-desc text-slate-500 dark:text-slate-400">
+                                        Guarda automáticamente tus entradas y etiquetas en la nube al crearlas, editarlas o eliminarlas, sin tener que presionar el botón de respaldo.
+                                    </div>
+                                </div>
+                            </div>
+                            <label class="cloud-switch" for="cloud-autosync-toggle" title="Activar/desactivar sincronización continua">
+                                <input type="checkbox" id="cloud-autosync-toggle">
+                                <span class="cloud-slider"></span>
+                            </label>
+                        </div>
+                        <div class="cloud-autosync-footer">
+                            <span class="cloud-autosync-subhint text-slate-400 dark:text-slate-500" id="cloud-autosync-subhint">Debounce de 3.5s y respaldo inmediato al cambiar o cerrar pestaña.</span>
+                        </div>
                     </div>
                 </div>
 

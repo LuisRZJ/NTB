@@ -65,14 +65,19 @@ function formatBytes(bytes) {
 }
 
 // --- Exportar datos ---
-export function exportData() {
+// --- Exportar datos ---
+export async function exportData() {
     try {
+        const cloudAutoSync = await getConfig('cloudAutoSync');
         const data = {
             version: 1,
             app: 'blog-editor',
             exportedAt: new Date().toISOString(),
             posts: posts,
-            labels: labels
+            labels: labels,
+            meta: {
+                cloudAutoSync: cloudAutoSync === true || _cloudAutoSyncEnabled
+            }
         };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -114,6 +119,14 @@ export function importData(event) {
                 setLabels(data.labels);
                 await saveLabelsToStorage();
             }
+
+            if (data.meta && typeof data.meta.cloudAutoSync === 'boolean') {
+                _cloudAutoSyncEnabled = data.meta.cloudAutoSync;
+                await saveConfig('cloudAutoSync', _cloudAutoSyncEnabled);
+                localStorage.setItem('blog_cloud_auto_sync', _cloudAutoSyncEnabled ? 'true' : 'false');
+                updateAutoSyncUIState(_cloudAutoSyncEnabled);
+            }
+            _dataDirty = false;
 
             showToast(`Importados ${data.posts.length} entradas correctamente`);
 
@@ -197,6 +210,267 @@ export function confirmResetApplicationData() {
 
 // ── Sincronización en la Nube (Vercel Serverless) ───────────────────────────────
 
+let _cloudAutoSyncEnabled = false;
+let _autoSyncTimer = null;
+let _autoSyncRetryTimer = null;
+let _autoSyncRetryCount = 0;
+let _isSyncingCloud = false;
+let _autoSyncPending = false;
+let _dataDirty = false;
+const AUTO_SYNC_DEBOUNCE_MS = 3500;
+
+export function markDataDirty() {
+    if (window._isAppInitializing) return;
+    _dataDirty = true;
+    if (typeof scheduleAutoSync === 'function' && _cloudAutoSyncEnabled) {
+        scheduleAutoSync();
+    }
+}
+window.markDataDirty = markDataDirty;
+
+export function scheduleAutoSync() {
+    if (!_cloudAutoSyncEnabled) return;
+    const password = sessionStorage.getItem('github_sync_pass');
+    if (!password) return;
+
+    if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+    if (_autoSyncRetryTimer) clearTimeout(_autoSyncRetryTimer);
+
+    setCloudStatus('Cambios pendientes...', 'pending');
+
+    _autoSyncTimer = setTimeout(async () => {
+        _autoSyncTimer = null;
+        await runAutoSync();
+    }, AUTO_SYNC_DEBOUNCE_MS);
+}
+
+export async function runAutoSync(force = false) {
+    const backdrop = document.getElementById('github-update-backdrop');
+    if (backdrop && !backdrop.classList.contains('hidden')) return;
+    if (!_cloudAutoSyncEnabled && !force) return;
+    const password = sessionStorage.getItem('github_sync_pass');
+    if (!password) return;
+
+    if (_isSyncingCloud) {
+        _autoSyncPending = true;
+        return;
+    }
+
+    if (_autoSyncTimer) {
+        clearTimeout(_autoSyncTimer);
+        _autoSyncTimer = null;
+    }
+
+    _isSyncingCloud = true;
+
+    try {
+        await executeCloudBackup({ silent: true, isAuto: true });
+        _autoSyncRetryCount = 0;
+    } catch (err) {
+        _autoSyncRetryCount++;
+        const delay = Math.min(60000, 5000 * Math.pow(2, _autoSyncRetryCount - 1));
+        _autoSyncRetryTimer = setTimeout(() => {
+            runAutoSync();
+        }, delay);
+    } finally {
+        _isSyncingCloud = false;
+        if (_autoSyncPending) {
+            _autoSyncPending = false;
+            if (_dataDirty) {
+                runAutoSync();
+            }
+        }
+    }
+}
+
+export async function executeCloudBackup({ silent = false, isAuto = false } = {}) {
+    const password = sessionStorage.getItem('github_sync_pass');
+    if (!password) {
+        if (!silent) showToast('Inicia sesión ingresando tu contraseña de sincronización.');
+        return false;
+    }
+
+    const pushBtn = document.getElementById('btn-github-push');
+    const originalHTML = pushBtn ? pushBtn.innerHTML : '';
+    if (pushBtn && !silent) {
+        pushBtn.disabled = true;
+        pushBtn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">sync</span> Subiendo respaldo...';
+    }
+
+    setCloudStatus('Guardando en la nube...', 'loading');
+
+    try {
+        const cloudAutoSync = await getConfig('cloudAutoSync');
+        const backupData = {
+            version: 1,
+            app: 'blog-editor',
+            exportedAt: new Date().toISOString(),
+            posts: posts,
+            labels: labels,
+            meta: {
+                cloudAutoSync: cloudAutoSync === true || _cloudAutoSyncEnabled
+            }
+        };
+
+        const res = await callSyncAPI('push', password, backupData);
+
+        await saveConfig('last_backup_sha', res.sha);
+        _dataDirty = false;
+
+        const t = new Date();
+        const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+        setCloudStatus('Sincronizado · ' + timeStr, 'ok');
+
+        if (!silent) {
+            showToast('Copia de seguridad subida con éxito a la nube');
+        }
+        return true;
+    } catch (e) {
+        console.error('[CloudSync] Error al respaldar:', e);
+        if (!silent) {
+            showToast('Error al respaldar en la nube: ' + e.message);
+        }
+        setCloudStatus(isAuto ? 'Error al sincronizar · Reintentando...' : 'Error al subir', 'err');
+        throw e;
+    } finally {
+        if (pushBtn && !silent) {
+            pushBtn.disabled = false;
+            pushBtn.innerHTML = originalHTML;
+        }
+    }
+}
+
+export function updateAutoSyncUIState(enabled) {
+    const toggle = document.getElementById('cloud-autosync-toggle');
+    const badge = document.getElementById('cloud-autosync-badge');
+    const subhint = document.getElementById('cloud-autosync-subhint');
+    if (toggle) toggle.checked = !!enabled;
+    if (badge) {
+        badge.textContent = enabled ? 'Activo' : 'Desactivado';
+        badge.classList.toggle('active', !!enabled);
+    }
+    if (subhint) {
+        subhint.textContent = enabled
+            ? 'Sincronizando automáticamente en segundo plano (debounce 3.5s).'
+            : 'Debounce de 3.5s y respaldo inmediato al cambiar o cerrar pestaña.';
+    }
+}
+
+export function setCloudStatus(msg, type) {
+    const badge = document.getElementById('github-status-badge');
+    const headerSync = document.getElementById('header-cloud-sync');
+    const headerDot = document.getElementById('header-cloud-dot');
+    const headerText = document.getElementById('header-cloud-text');
+
+    let dotColorClass = 'bg-slate-400';
+    if (type === 'ok') dotColorClass = 'bg-green-500';
+    else if (type === 'err') dotColorClass = 'bg-red-500';
+    else if (type === 'loading') dotColorClass = 'bg-google-blue dark:bg-google-blueDark animate-spin';
+    else if (type === 'pending') dotColorClass = 'bg-amber-500 animate-pulse';
+
+    if (badge) {
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full ${dotColorClass}"></span> <span>${msg}</span>`;
+    }
+
+    if (headerSync) {
+        const isConn = !!sessionStorage.getItem('github_sync_pass');
+        if (isConn) {
+            headerSync.style.display = 'inline-flex';
+            if (headerDot) headerDot.className = `w-2 h-2 rounded-full ${dotColorClass}`;
+            if (headerText) {
+                if (msg.startsWith('Sincronizado')) headerText.textContent = 'Sincronizado';
+                else if (msg.startsWith('Guardando')) headerText.textContent = 'Guardando...';
+                else if (msg.startsWith('Cambios pendientes')) headerText.textContent = 'Pendiente';
+                else if (msg.startsWith('Error')) headerText.textContent = 'Error';
+                else headerText.textContent = msg;
+            }
+        } else {
+            headerSync.style.display = 'none';
+        }
+    }
+}
+
+function setupCloudAutoSync() {
+    const autoSyncToggle = document.getElementById('cloud-autosync-toggle');
+    if (autoSyncToggle && !autoSyncToggle._wired) {
+        autoSyncToggle._wired = true;
+        autoSyncToggle.addEventListener('change', async () => {
+            const isChecked = autoSyncToggle.checked;
+            const pass = sessionStorage.getItem('github_sync_pass');
+            if (isChecked && !pass) {
+                autoSyncToggle.checked = false;
+                showToast('Conecta la sincronización primero con tu contraseña');
+                return;
+            }
+            _cloudAutoSyncEnabled = isChecked;
+            await saveConfig('cloudAutoSync', isChecked);
+            localStorage.setItem('blog_cloud_auto_sync', isChecked ? 'true' : 'false');
+            updateAutoSyncUIState(isChecked);
+            if (isChecked) {
+                showToast('Sincronización continua en la nube activada');
+                if (_dataDirty) {
+                    scheduleAutoSync();
+                }
+            } else {
+                if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+                showToast('Sincronización continua desactivada');
+                setCloudStatus('Conectado a la Nube', 'ok');
+            }
+        });
+    }
+
+    if (!window._cloudLifecycleWired) {
+        window._cloudLifecycleWired = true;
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden' && _cloudAutoSyncEnabled && _dataDirty) {
+                if (_autoSyncTimer) {
+                    clearTimeout(_autoSyncTimer);
+                    _autoSyncTimer = null;
+                }
+                runAutoSync();
+            }
+        });
+
+        window.addEventListener('pagehide', () => {
+            if (_cloudAutoSyncEnabled && _dataDirty) {
+                if (_autoSyncTimer) {
+                    clearTimeout(_autoSyncTimer);
+                    _autoSyncTimer = null;
+                }
+                runAutoSync();
+            }
+        });
+
+        window.addEventListener('online', () => {
+            if (_cloudAutoSyncEnabled && _dataDirty) {
+                showToast('Conexión reestablecida: sincronizando...');
+                runAutoSync();
+            }
+        });
+
+        window.addEventListener('focus', () => {
+            const backdrop = document.getElementById('github-update-backdrop');
+            const isUpdateModalOpen = backdrop && !backdrop.classList.contains('hidden');
+            if (_cloudAutoSyncEnabled && !_dataDirty && !_isSyncingCloud && !isUpdateModalOpen) {
+                const pass = sessionStorage.getItem('github_sync_pass');
+                if (pass) checkCloudVersion(pass);
+            }
+        });
+
+        if (!window._cloudPeriodicTimer) {
+            window._cloudPeriodicTimer = setInterval(() => {
+                const backdrop = document.getElementById('github-update-backdrop');
+                const isUpdateModalOpen = backdrop && !backdrop.classList.contains('hidden');
+                if (_cloudAutoSyncEnabled && !_dataDirty && !_isSyncingCloud && !isUpdateModalOpen) {
+                    const pass = sessionStorage.getItem('github_sync_pass');
+                    if (pass) checkCloudVersion(pass);
+                }
+            }, 180000);
+        }
+    }
+}
+
 /**
  * Llama a la API serverless para realizar operaciones de sincronización.
  */
@@ -227,6 +501,11 @@ async function callSyncAPI(action, password, data = null) {
  */
 export async function initGithubSync() {
     try {
+        const savedAutoSync = await getConfig('cloudAutoSync');
+        _cloudAutoSyncEnabled = savedAutoSync === true || localStorage.getItem('blog_cloud_auto_sync') === 'true';
+        setupCloudAutoSync();
+        updateAutoSyncUIState(_cloudAutoSyncEnabled);
+
         // 1. Verificar si hay sesión en sessionStorage primero
         const sessionPass = sessionStorage.getItem('github_sync_pass');
 
@@ -390,40 +669,10 @@ export async function saveGithubSettings() {
 }
 
 export async function pushToGithub() {
-    const password = sessionStorage.getItem('github_sync_pass');
-    if (!password) {
-        showToast('Inicia sesión ingresando tu contraseña de sincronización.');
-        return;
-    }
-
-    const pushBtn = document.getElementById('btn-github-push');
-    const originalHTML = pushBtn ? pushBtn.innerHTML : '';
-    if (pushBtn) {
-        pushBtn.disabled = true;
-        pushBtn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">sync</span> Subiendo respaldo...';
-    }
-
     try {
-        const backupData = {
-            version: 1,
-            app: 'blog-editor',
-            exportedAt: new Date().toISOString(),
-            posts: posts,
-            labels: labels
-        };
-
-        const res = await callSyncAPI('push', password, backupData);
-
-        await saveConfig('last_backup_sha', res.sha);
-
-        showToast('Copia de seguridad subida con éxito a la nube');
+        await executeCloudBackup({ silent: false, isAuto: false });
     } catch (e) {
-        showToast('Error al respaldar en la nube: ' + e.message);
-    } finally {
-        if (pushBtn) {
-            pushBtn.disabled = false;
-            pushBtn.innerHTML = originalHTML;
-        }
+        // Error gestionado en executeCloudBackup
     }
 }
 
@@ -455,6 +704,14 @@ export async function confirmGithubPull() {
         setLabels(backupData.labels || []);
         await saveLabelsToStorage();
 
+        if (backupData.meta && typeof backupData.meta.cloudAutoSync === 'boolean') {
+            _cloudAutoSyncEnabled = backupData.meta.cloudAutoSync;
+            await saveConfig('cloudAutoSync', _cloudAutoSyncEnabled);
+            localStorage.setItem('blog_cloud_auto_sync', _cloudAutoSyncEnabled ? 'true' : 'false');
+            updateAutoSyncUIState(_cloudAutoSyncEnabled);
+        }
+        _dataDirty = false;
+
         // Guardar el SHA local de la versión que acabamos de descargar
         await saveConfig('last_backup_sha', res.sha);
 
@@ -470,6 +727,9 @@ export function skipGithubUpdate() {
     const backdrop = document.getElementById('github-update-backdrop');
     if (backdrop) backdrop.classList.add('hidden');
     showToast('Actualización de la nube ignorada. Los cambios locales sobrescribirán la nube en tu próximo respaldo.');
+    if (_cloudAutoSyncEnabled && _dataDirty) {
+        scheduleAutoSync();
+    }
 }
 
 async function checkCloudVersion(password) {
@@ -481,6 +741,11 @@ async function checkCloudVersion(password) {
         // Comprobar si el archivo en la nube es idéntico al último sincronizado
         const lastBackupSha = await getConfig('last_backup_sha');
         if (meta.sha === lastBackupSha) {
+            if (!_dataDirty) {
+                const t = new Date();
+                const timeStr = t.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+                setCloudStatus('Sincronizado · ' + timeStr, 'ok');
+            }
             return; // Son idénticos, no hay actualización pendiente
         }
 
@@ -509,21 +774,32 @@ async function checkCloudVersion(password) {
 function updateGithubUIState(state) {
     const badge = document.getElementById('github-status-badge');
     const actions = document.getElementById('github-actions-container');
+    const autoSyncCard = document.getElementById('cloud-autosync-container');
+    const headerSync = document.getElementById('header-cloud-sync');
 
     if (!badge) return;
 
     if (state === 'unconfigured') {
         badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-700"></span> Sin configurar';
         if (actions) actions.classList.add('hidden');
+        if (autoSyncCard) autoSyncCard.classList.add('hidden');
+        if (headerSync) headerSync.style.display = 'none';
     } else if (state === 'locked') {
         badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Bloqueado (Requiere contraseña)';
         if (actions) actions.classList.add('hidden');
+        if (autoSyncCard) autoSyncCard.classList.add('hidden');
+        if (headerSync) headerSync.style.display = 'none';
     } else if (state === 'connected') {
-        badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500"></span> Conectado a la Nube';
+        setCloudStatus('Conectado a la Nube', 'ok');
         if (actions) actions.classList.remove('hidden');
+        if (autoSyncCard) autoSyncCard.classList.remove('hidden');
+        if (headerSync) headerSync.style.display = 'inline-flex';
+        updateAutoSyncUIState(_cloudAutoSyncEnabled);
     } else if (state === 'local') {
-        badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-slate-400"></span> Desconectado (Modo local)';
+        setCloudStatus('Desconectado (Modo local)', '');
         if (actions) actions.classList.add('hidden');
+        if (autoSyncCard) autoSyncCard.classList.add('hidden');
+        if (headerSync) headerSync.style.display = 'none';
     }
 }
 

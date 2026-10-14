@@ -12,6 +12,7 @@ import { populateLabelSelectors, renderSidebarLabels } from './componentes/label
 import { initGithubSync } from './componentes/settings.js';
 
 export async function initializeApp() {
+    window._isAppInitializing = true;
     initializeTheme();
     await initializeNotes();
     await initGithubSync();
@@ -22,6 +23,7 @@ export async function initializeApp() {
     toggleLayoutStyles();
     detectTouchDevice();
     initializeUsageMetrics();
+    window._isAppInitializing = false;
 }
 
 function initializeUsageMetrics() {

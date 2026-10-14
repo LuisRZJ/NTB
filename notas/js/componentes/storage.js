@@ -70,6 +70,9 @@ export function saveNotesToStorage() {
 
         transaction.oncomplete = () => {
             updateBadgesCounts();
+            if (typeof window.markDataDirty === 'function') {
+                window.markDataDirty();
+            }
         };
 
         transaction.onerror = (e) => {
@@ -92,6 +95,12 @@ export function saveLabelsToStorage() {
             getLabelsList().forEach(label => {
                 store.put({ name: label.name, color: label.color });
             });
+        };
+
+        transaction.oncomplete = () => {
+            if (typeof window.markDataDirty === 'function') {
+                window.markDataDirty();
+            }
         };
 
         transaction.onerror = (e) => {

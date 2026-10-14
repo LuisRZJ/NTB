@@ -71,6 +71,9 @@ export function savePostsToStorage() {
 
         transaction.oncomplete = () => {
             db.close();
+            if (typeof window.markDataDirty === 'function') {
+                window.markDataDirty();
+            }
         };
 
         transaction.onerror = (e) => {
@@ -102,6 +105,9 @@ export function saveLabelsToStorage() {
 
         transaction.oncomplete = () => {
             db.close();
+            if (typeof window.markDataDirty === 'function') {
+                window.markDataDirty();
+            }
         };
 
         transaction.onerror = (e) => {

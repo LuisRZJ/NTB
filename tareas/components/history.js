@@ -64,6 +64,8 @@
 
   let _historyEntries = [];
   let _activeFilter   = 'all';
+  const HISTORY_PAGE_SIZE = 60;
+  let _historyLimit   = HISTORY_PAGE_SIZE;
 
   // ── Helpers de fecha ──
   function _isoDate(ms) {
@@ -157,10 +159,11 @@
       return;
     }
 
-    // Agrupar por fecha (más reciente primero)
+    // Agrupar por fecha con paginación progresiva para mantener 60 FPS
     const sorted = [...filtered].sort((a, b) => b.id - a.id);
+    const visibleEntries = sorted.slice(0, _historyLimit);
     const byDay  = new Map();
-    for (const e of sorted) {
+    for (const e of visibleEntries) {
       const day = _isoDate(e.id);
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day).push(e);
@@ -196,7 +199,26 @@
       }
       html += `</div>`;
     }
+
+    if (sorted.length > _historyLimit) {
+      const remaining = sorted.length - _historyLimit;
+      const nextChunk = Math.min(HISTORY_PAGE_SIZE, remaining);
+      html += `
+        <div class="search-load-more-wrap" style="padding:16px 0; text-align:center;">
+          <div class="search-results-counter" style="margin-bottom:8px;">Mostrando ${_historyLimit.toLocaleString('es-ES')} de ${sorted.length.toLocaleString('es-ES')} eventos</div>
+          <button class="search-load-more-btn" id="history-load-more" type="button">Cargar ${nextChunk} más · ${remaining} restantes</button>
+        </div>`;
+    }
+
     body.innerHTML = html;
+
+    const loadMoreBtn = document.getElementById('history-load-more');
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', () => {
+        _historyLimit += HISTORY_PAGE_SIZE;
+        renderHistory();
+      });
+    }
   }
 
   // ── Filtros ──
@@ -206,6 +228,7 @@
     filterBar.querySelectorAll('.history-filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     _activeFilter = btn.dataset.hfilter;
+    _historyLimit = HISTORY_PAGE_SIZE;
     renderHistory();
   });
 
@@ -214,6 +237,7 @@
     _historyEntries = await dbGetHistory();
     _historyEntries.sort((a, b) => b.id - a.id);
     _activeFilter = 'all';
+    _historyLimit = HISTORY_PAGE_SIZE;
     filterBar.querySelectorAll('.history-filter-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.hfilter === 'all');
     });

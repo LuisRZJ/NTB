@@ -23,6 +23,11 @@ let _searchResultCache = new Map();
 let _searchDebounceTimer = null;
 let _searchRenderLimit = 250;
 let _taskTitleMapCache = null;
+let _subtasksByParentMap = null;
+let _suggestionsAnalysisCache = null;
+const LIST_RENDER_STEP = 150;
+let _listRenderLimit = LIST_RENDER_STEP;
+const _isoWeekCache = new Map();
 let aiChats = [];
 let aiChatFolders = [];
 let _aiContextRevision = 0;
@@ -37,6 +42,8 @@ function markDirty() {
   _searchIndexDirty = true;
   _searchResultCache.clear();
   _taskTitleMapCache = null;
+  _subtasksByParentMap = null;
+  _suggestionsAnalysisCache = null;
   _aiContextRevision++;
   _aiContextCache = null;
   _aiToolQueryCache.clear();
@@ -139,6 +146,7 @@ function rebuildFilterButtons() {
       panel.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       filterMode = btn.dataset.filter;
+      _listRenderLimit = LIST_RENDER_STEP;
       const labels = { all:'Filtros', pending:'Pendientes', done:'Completadas' };
       for (const [k, c] of Object.entries(CATS)) labels[k] = c.label;
       for (const p of PROJECTS) labels['proj:' + p.id] = '◫ ' + p.name;
@@ -812,8 +820,25 @@ function getProjectBadge(t) {
   return `<span class="project-badge">◫ ${escHtml(proj.name)}</span>`;
 }
 
+function getSubtasksMap() {
+  if (_subtasksByParentMap) return _subtasksByParentMap;
+  _subtasksByParentMap = new Map();
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (t.parentId) {
+      let list = _subtasksByParentMap.get(t.parentId);
+      if (!list) {
+        list = [];
+        _subtasksByParentMap.set(t.parentId, list);
+      }
+      list.push(t);
+    }
+  }
+  return _subtasksByParentMap;
+}
+
 function getSubtasks(id) {
-  return tasks.filter(t => t.parentId === id);
+  return getSubtasksMap().get(id) || [];
 }
 function getSubtaskBadge(t) {
   const subs = getSubtasks(t.id);
@@ -986,6 +1011,7 @@ function _safeEscSuggest(str) {
 }
 
 function getSuggestionsAnalysis() {
+  if (_suggestionsAnalysisCache) return _suggestionsAnalysisCache;
   const pendingTop = tasks.filter(t => !t.done && !t.parentId);
   const doneTop = tasks.filter(t => t.done && !t.parentId);
   const totalTop = pendingTop.length + doneTop.length;
@@ -1046,7 +1072,7 @@ function getSuggestionsAnalysis() {
 
   // 3. Victorias rápidas (subtareas con 66%+ de avance o solo 1 subtarea pendiente)
   pendingTop.forEach(t => {
-    const subs = tasks.filter(s => s.parentId === t.id);
+    const subs = getSubtasks(t.id);
     if (!subs.length) return;
     const subsDone = subs.filter(s => s.done).length;
     const remaining = subs.length - subsDone;
@@ -1072,7 +1098,7 @@ function getSuggestionsAnalysis() {
 
   // 4. Fricción monolítica (descripción extensa o título largo sin ninguna subtarea)
   pendingTop.forEach(t => {
-    const subs = tasks.filter(s => s.parentId === t.id);
+    const subs = getSubtasks(t.id);
     if (subs.length > 0) return;
     const descLen = (t.desc || '').trim().length;
     const titleLen = (t.text || '').trim().length;
@@ -1163,7 +1189,7 @@ function getSuggestionsAnalysis() {
 
   const completionRate = totalTop ? Math.round(doneTop.length / totalTop * 100) : 100;
 
-  return {
+  _suggestionsAnalysisCache = {
     healthScore,
     healthGrade,
     pendingCount: pendingTop.length,
@@ -1171,6 +1197,7 @@ function getSuggestionsAnalysis() {
     completionRate,
     suggestions
   };
+  return _suggestionsAnalysisCache;
 }
 
 async function handleSuggestionAction(action, taskId) {
@@ -1385,9 +1412,12 @@ function render() {
   const list = document.getElementById('task-list');
   const searchActive = !!searchQuery.trim();
   const searchResults = searchActive ? searchTasksGlobal(searchQuery) : [];
-  const visible = searchActive ? searchResults.slice(0, _searchRenderLimit) : filteredTasks();
+  const allFiltered = filteredTasks();
+  const visible = searchActive 
+    ? searchResults.slice(0, _searchRenderLimit) 
+    : (allFiltered.length > _listRenderLimit ? allFiltered.slice(0, _listRenderLimit) : allFiltered);
   const scoped  = searchActive ? searchResults : scopedTasks();
-  const searchTotal = searchActive ? searchResults.length : 0;
+  const searchTotal = searchActive ? searchResults.length : allFiltered.length;
   const todayStr = todayISO();
 
   // ── Anillo de progreso: todas las tareas y subtareas de hoy, filtrado por categoría o proyecto ──
@@ -1492,7 +1522,7 @@ function render() {
     } else if (priFilter === 'suggestions') {
       listLabelEl.textContent = '— SUGERENCIAS · DIAGNÓSTICO';
     } else {
-      listLabelEl.textContent = `— TAREAS · ${scopeText} · ${visible.length}`;
+      listLabelEl.textContent = `— TAREAS · ${scopeText} · ${allFiltered.length}`;
     }
   }
 
@@ -1560,25 +1590,43 @@ function render() {
     }).join('');
   } else {
     list.innerHTML = visible.map(t => renderTaskItem(t)).join('');
-    if (searchActive) {
-      const shown = visible.length;
-      const remain = Math.max(0, searchTotal - shown);
-      const shownText = shown.toLocaleString('es-ES');
-      const totalText = searchTotal.toLocaleString('es-ES');
-      const nextChunk = Math.min(SEARCH_RENDER_STEP, remain);
-      list.innerHTML += `<div class="search-load-more-wrap">
-        <div class="search-results-counter">Mostrando ${shownText} de ${totalText} resultados</div>
-        ${remain > 0 ? `<button class="search-load-more-btn" id="search-load-more" type="button">Cargar ${nextChunk} más · ${remain} restantes</button>` : ''}
-      </div>`;
-      if (remain > 0) {
-        const loadMoreBtn = document.getElementById('search-load-more');
-        if (loadMoreBtn) {
-          loadMoreBtn.addEventListener('click', () => {
-            _searchRenderLimit += SEARCH_RENDER_STEP;
-            render();
-          });
-        }
+  }
+
+  if (searchActive) {
+    const shown = visible.length;
+    const remain = Math.max(0, searchTotal - shown);
+    const shownText = shown.toLocaleString('es-ES');
+    const totalText = searchTotal.toLocaleString('es-ES');
+    const nextChunk = Math.min(SEARCH_RENDER_STEP, remain);
+    list.innerHTML += `<div class="search-load-more-wrap">
+      <div class="search-results-counter">Mostrando ${shownText} de ${totalText} resultados</div>
+      ${remain > 0 ? `<button class="search-load-more-btn" id="search-load-more" type="button">Cargar ${nextChunk} más · ${remain} restantes</button>` : ''}
+    </div>`;
+    if (remain > 0) {
+      const loadMoreBtn = document.getElementById('search-load-more');
+      if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', () => {
+          _searchRenderLimit += SEARCH_RENDER_STEP;
+          render();
+        });
       }
+    }
+  } else if (!searchActive && allFiltered.length > visible.length) {
+    const shown = visible.length;
+    const remain = allFiltered.length - shown;
+    const shownText = shown.toLocaleString('es-ES');
+    const totalText = allFiltered.length.toLocaleString('es-ES');
+    const nextChunk = Math.min(LIST_RENDER_STEP, remain);
+    list.innerHTML += `<div class="search-load-more-wrap">
+      <div class="search-results-counter">Mostrando ${shownText} de ${totalText} tareas</div>
+      <button class="search-load-more-btn" id="list-load-more" type="button">Cargar ${nextChunk} más · ${remain} restantes</button>
+    </div>`;
+    const loadMoreBtn = document.getElementById('list-load-more');
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', () => {
+        _listRenderLimit += LIST_RENDER_STEP;
+        render();
+      });
     }
   }
   // Refresh project detail if open
@@ -1703,6 +1751,7 @@ function setPriorityFilter(nextPri, swipeDelta = 0) {
   if (!PRIORITY_ORDER.includes(nextPri)) return;
   if (priFilter === nextPri) return;
   priFilter = nextPri;
+  _listRenderLimit = LIST_RENDER_STEP;
 
   document.querySelectorAll('.pri-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.pri === nextPri);
@@ -1983,6 +2032,7 @@ function triggerSearchRender(immediate = false) {
       document.querySelectorAll('.scope-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       dateScope = btn.dataset.scope;
+      _listRenderLimit = LIST_RENDER_STEP;
       document.getElementById('scope-toggle-label').textContent = btn.textContent.trim();
       render();
     });
@@ -2872,13 +2922,19 @@ function renderStorageUsage() {
     return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
   };
 
-  // Estimate: serialize each store to JSON
-  const tasksBytes = new TextEncoder().encode(JSON.stringify(tasks)).length;
-  const catsBytes  = new TextEncoder().encode(JSON.stringify(
-    Object.entries(CATS).filter(([k]) => !(['trabajo','personal','salud','otro'].includes(k)))
-  )).length;
-  const projBytes  = new TextEncoder().encode(JSON.stringify(PROJECTS)).length;
-  const chatsBytes = new TextEncoder().encode(JSON.stringify({ chats: aiChats || [], folders: aiChatFolders || [] })).length;
+  // Optimización de rendimiento: estimación ligera sin serializar sincrónicamente miles de tareas
+  let tasksBytes = 0;
+  if (tasks.length > 0) {
+    const sampleSize = Math.min(tasks.length, 25);
+    let sampleBytes = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      sampleBytes += JSON.stringify(tasks[i]).length;
+    }
+    tasksBytes = Math.round((sampleBytes / sampleSize) * tasks.length);
+  }
+  const catsBytes  = 1024;
+  const projBytes  = (PROJECTS.length || 0) * 120;
+  const chatsBytes = ((aiChats && aiChats.length) || 0) * 850;
   const total = tasksBytes + catsBytes + projBytes + chatsBytes;
 
   // IndexedDB quota hint (if available)
@@ -4721,11 +4777,14 @@ async function renderStats() {
   document.getElementById('stats-pri-mid').textContent = done.filter(t => t.pri === 'mid').length;
   document.getElementById('stats-pri-low').textContent = done.filter(t => t.pri === 'low').length;
 
-  // Days since first task (use task.id as creation timestamp)
-  const allTimes = tasks.map(t => t.id).filter(Boolean);
+  // Days since first task: iteración O(N) sin spread operator para evitar desbordamiento de pila
+  let firstMs = Infinity;
+  for (let i = 0; i < tasks.length; i++) {
+    const tid = Number(tasks[i].id);
+    if (tid && tid < firstMs) firstMs = tid;
+  }
   const daysSinceDateEl = document.getElementById('stats-days-since-date');
-  if (allTimes.length) {
-    const firstMs = Math.min(...allTimes);
+  if (firstMs !== Infinity) {
     const daysSince = Math.floor((Date.now() - firstMs) / 86400000);
     document.getElementById('stats-days-since').textContent = daysSince;
     if (daysSinceDateEl) {
@@ -4812,15 +4871,39 @@ async function renderStats() {
   await renderMonthSection();
 }
 
-function calcWeekStreak(done) {
-  // Build a Set of ISO week strings (YYYY-Www) for weeks with ≥1 completion
-  const weeksWithDone = new Set();
-  for (const t of done) {
-    if (!t.due) continue;
-    const d = new Date(t.due + 'T00:00:00');
-    weeksWithDone.add(isoWeek(d));
+function isoWeekFromDateStr(dateStr) {
+  if (!dateStr) return '';
+  let cached = _isoWeekCache.get(dateStr);
+  if (cached) return cached;
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const y = Number(parts[0]), m = Number(parts[1]) - 1, day = Number(parts[2]);
+    const tmp = new Date(Date.UTC(y, m, day));
+    const dayOfWeek = tmp.getUTCDay() || 7;
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - dayOfWeek);
+    const year = tmp.getUTCFullYear();
+    const week = Math.ceil(((tmp - Date.UTC(year, 0, 1)) / 86400000 + 1) / 7);
+    cached = `${year}-W${String(week).padStart(2, '0')}`;
+    if (_isoWeekCache.size > 2000) _isoWeekCache.clear();
+    _isoWeekCache.set(dateStr, cached);
+    return cached;
   }
-  // Walk backwards from current week, count streak and find start Monday
+  return isoWeek(new Date(dateStr + 'T00:00:00'));
+}
+
+function getDoneWeeksSet(done) {
+  const weeksWithDone = new Set();
+  for (let i = 0; i < done.length; i++) {
+    const due = done[i].due;
+    if (!due) continue;
+    const wk = isoWeekFromDateStr(due);
+    if (wk) weeksWithDone.add(wk);
+  }
+  return weeksWithDone;
+}
+
+function calcWeekStreak(done) {
+  const weeksWithDone = getDoneWeeksSet(done);
   let count = 0;
   let startDate = null;
   const cursor = new Date();
@@ -4828,7 +4911,6 @@ function calcWeekStreak(done) {
     const wk = isoWeek(cursor);
     if (!weeksWithDone.has(wk)) break;
     count++;
-    // Record the Monday of this week as new (earlier) start
     const monday = new Date(cursor);
     const dayOfWeek = monday.getDay() || 7;
     monday.setDate(monday.getDate() - (dayOfWeek - 1));
@@ -4839,12 +4921,7 @@ function calcWeekStreak(done) {
 }
 
 function calcAllStreaks(done) {
-  // Build sorted array of unique ISO weeks with completions
-  const weekSet = new Set();
-  for (const t of done) {
-    if (!t.due) continue;
-    weekSet.add(isoWeek(new Date(t.due + 'T00:00:00')));
-  }
+  const weekSet = getDoneWeeksSet(done);
   if (!weekSet.size) return [];
 
   // Sort weeks chronologically

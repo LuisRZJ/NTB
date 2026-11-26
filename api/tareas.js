@@ -1,6 +1,46 @@
 // api/tareas.js — Endpoint de solo lectura para consultar tareas del día por prioridad
 // Soporta CORS para frontend/backend, autenticación por token y rate limiting integrado.
 
+const { webcrypto } = require('crypto');
+
+async function decryptBackup(encryptedData, password) {
+  const subtle = webcrypto.subtle;
+  const encoder = new TextEncoder();
+  const salt = Buffer.from(encryptedData.salt, 'base64');
+  const iv = Buffer.from(encryptedData.iv, 'base64');
+  const ciphertext = Buffer.from(encryptedData.ciphertext, 'base64');
+  const iterations = Number(encryptedData.iterations) || 100000;
+
+  const passwordKey = await subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  const key = await subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations,
+      hash: 'SHA-256'
+    },
+    passwordKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+
+  const decrypted = await subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext
+  );
+
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
 // ── Rate Limiter en Memoria (Ventana Deslizante) ──
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minuto
 const RATE_LIMIT_MAX_REQUESTS = 30;     // 30 peticiones por minuto por IP
@@ -140,6 +180,22 @@ module.exports = async function handler(req, res) {
       backupData = await downloadRes.json();
     } else {
       throw new Error('Formato de respuesta de GitHub desconocido');
+    }
+
+    if (backupData && backupData.encrypted === true) {
+      const ENCRYPTION_KEY = process.env.BACKUP_ENCRYPTION_KEY;
+      if (!ENCRYPTION_KEY) {
+        return res.status(500).json({
+          error: 'La variable de entorno BACKUP_ENCRYPTION_KEY no está configurada en Vercel para descifrar el respaldo.'
+        });
+      }
+      try {
+        backupData = await decryptBackup(backupData, ENCRYPTION_KEY);
+      } catch (decErr) {
+        return res.status(500).json({
+          error: 'No se pudo descifrar el respaldo de tareas. Verifica BACKUP_ENCRYPTION_KEY en Vercel.'
+        });
+      }
     }
 
     const allTasks = Array.isArray(backupData.tasks) ? backupData.tasks : [];

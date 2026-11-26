@@ -1,8 +1,8 @@
 // api/sync.js — Proxy serverless unificado para sincronización segura con GitHub
 
 module.exports = async function handler(req, res) {
-  // Cabeceras CORS para desarrollo local con `vercel dev`
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Cabeceras CORS
+  res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -11,7 +11,7 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'Método no permitido (solo POST)' });
   }
 
-  const { password, module: appModule, action, data } = req.body || {};
+  const { password, module: appModule, action, data, expectedSha } = req.body || {};
 
   // 1. Validar variables de entorno críticas del servidor
   const SYNC_PASSWORD = process.env.SYNC_PASSWORD;
@@ -175,6 +175,13 @@ module.exports = async function handler(req, res) {
       if (getRes.ok) {
         const getJson = await getRes.json();
         sha = getJson.sha;
+      }
+
+      if (expectedSha && sha && sha !== expectedSha) {
+        return res.status(409).json({
+          error: 'Conflicto de versión: el respaldo en la nube cambió desde tu última sincronización.',
+          remoteSha: sha
+        });
       }
 
       // 2. Codificar contenido JSON a base64

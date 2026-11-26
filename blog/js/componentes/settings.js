@@ -2,6 +2,7 @@
 import { posts, labels, setPosts, setLabels } from './state.js';
 import { savePostsToStorage, saveLabelsToStorage, getConfig, saveConfig } from './storage.js';
 import { showToast } from './toast.js';
+import { encryptText, decryptText } from './crypto.js';
 // --- Estadísticas ---
 export function updateSettingsStats() {
     const countEl = document.getElementById('stats-posts-count');
@@ -285,8 +286,9 @@ export async function runAutoSync(force = false) {
 
 export async function executeCloudBackup({ silent = false, isAuto = false } = {}) {
     const password = sessionStorage.getItem('github_sync_pass');
-    if (!password) {
-        if (!silent) showToast('Inicia sesión ingresando tu contraseña de sincronización.');
+    const encKey = sessionStorage.getItem('github_enc_key');
+    if (!password || !encKey) {
+        if (!silent) showToast('Inicia sesión ingresando tu contraseña de sincronización y clave de cifrado.');
         return false;
     }
 
@@ -312,7 +314,17 @@ export async function executeCloudBackup({ silent = false, isAuto = false } = {}
             }
         };
 
-        const res = await callSyncAPI('push', password, backupData);
+        const encryptedPayload = await encryptText(JSON.stringify(backupData), encKey);
+        const envelope = {
+            encrypted: true,
+            v: 1,
+            alg: 'AES-256-GCM',
+            kdf: 'PBKDF2-SHA256',
+            iterations: 100000,
+            ...encryptedPayload
+        };
+
+        const res = await callSyncAPI('push', password, envelope);
 
         await saveConfig('last_backup_sha', res.sha);
         _dataDirty = false;
@@ -508,8 +520,9 @@ export async function initGithubSync() {
 
         // 1. Verificar si hay sesión en sessionStorage primero
         const sessionPass = sessionStorage.getItem('github_sync_pass');
+        const sessionEncKey = sessionStorage.getItem('github_enc_key');
 
-        if (sessionPass) {
+        if (sessionPass && sessionEncKey) {
             updateGithubUIState('connected');
             fillGithubUIFields();
             checkCloudVersion(sessionPass);
@@ -518,9 +531,10 @@ export async function initGithubSync() {
 
         // 2. Si no hay sesión, verificar localStorage para autologin de 15 días
         const storedPass = localStorage.getItem('github_sync_pass');
+        const storedEncKey = localStorage.getItem('github_enc_key');
         const savedAtStr = localStorage.getItem('github_sync_pass_saved_at');
 
-        if (storedPass && savedAtStr) {
+        if (storedPass && storedEncKey && savedAtStr) {
             const savedAt = parseInt(savedAtStr, 10) || 0;
             const fifteenDaysMs = 15 * 24 * 60 * 60 * 1000;
             const isExpired = (Date.now() - savedAt) >= fifteenDaysMs;
@@ -532,6 +546,7 @@ export async function initGithubSync() {
                     
                     // Guardar en sessionStorage para la sesión activa
                     sessionStorage.setItem('github_sync_pass', storedPass);
+                    sessionStorage.setItem('github_enc_key', storedEncKey);
 
                     updateGithubUIState('connected');
                     fillGithubUIFields();
@@ -552,13 +567,13 @@ export async function initGithubSync() {
 
                 const subtitle = document.getElementById('github-decrypt-subtitle');
                 if (subtitle) {
-                    subtitle.innerHTML = '<strong>Tu confirmación periódica de 15 días ha expirado.</strong> Por favor, reintroduce tu contraseña de sincronización para continuar.';
+                    subtitle.innerHTML = '<strong>Tu confirmación periódica de 15 días ha expirado.</strong> Por favor, reintroduce tu contraseña de sincronización y clave de cifrado para continuar.';
                 }
                 return;
             }
         }
 
-        // 3. Si no hay autologin configurado o falló, mostrar modal normal
+        // 3. Si no hay autologin configurado, falta clave de cifrado o falló, mostrar modal normal
         updateGithubUIState('locked');
         const backdrop = document.getElementById('github-decrypt-backdrop');
         if (backdrop) backdrop.classList.remove('hidden');
@@ -566,9 +581,16 @@ export async function initGithubSync() {
         const skipBtn = document.getElementById('github-skip-decrypt-btn');
         if (skipBtn) skipBtn.classList.remove('hidden');
 
+        if (storedPass && !storedEncKey) {
+            const passInput = document.getElementById('github-decrypt-pass-input');
+            if (passInput) passInput.value = storedPass;
+        }
+
         const subtitle = document.getElementById('github-decrypt-subtitle');
         if (subtitle) {
-            subtitle.textContent = 'Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.';
+            subtitle.textContent = (storedPass && !storedEncKey)
+                ? 'Se activó el cifrado de respaldos. Ingresa tu clave de cifrado para continuar.'
+                : 'Ingresa tu contraseña de sincronización y clave de cifrado para conectar con la nube.';
         }
     } catch (e) {
         console.error('[Settings] Error al inicializar Sincronización:', e);
@@ -577,19 +599,24 @@ export async function initGithubSync() {
 
 function fillGithubUIFields() {
     const passInput = document.getElementById('github-pass-input');
+    const encInput = document.getElementById('github-enc-key-input');
     const sessionPass = sessionStorage.getItem('github_sync_pass');
+    const sessionEncKey = sessionStorage.getItem('github_enc_key');
     if (passInput && sessionPass) passInput.value = sessionPass;
+    if (encInput && sessionEncKey) encInput.value = sessionEncKey;
 }
 
 export async function submitGithubDecrypt() {
     const input = document.getElementById('github-decrypt-pass-input');
+    const encInput = document.getElementById('github-decrypt-enc-input');
     const errorMsg = document.getElementById('github-decrypt-error');
     if (!input) return;
 
     const password = input.value;
-    if (!password) {
+    const encKey = encInput ? encInput.value : '';
+    if (!password || !encKey) {
         if (errorMsg) {
-            errorMsg.textContent = 'Ingresa la contraseña';
+            errorMsg.textContent = 'Ingresa la contraseña de sincronización y la clave de cifrado';
             errorMsg.classList.remove('hidden');
         }
         return;
@@ -600,9 +627,11 @@ export async function submitGithubDecrypt() {
         await callSyncAPI('auth', password);
         
         sessionStorage.setItem('github_sync_pass', password);
+        sessionStorage.setItem('github_enc_key', encKey);
 
         // Guardar de forma persistente en localStorage para el ciclo de 15 días
         localStorage.setItem('github_sync_pass', password);
+        localStorage.setItem('github_enc_key', encKey);
         localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
 
         const backdrop = document.getElementById('github-decrypt-backdrop');
@@ -614,7 +643,7 @@ export async function submitGithubDecrypt() {
         if (skipBtn) skipBtn.classList.remove('hidden');
         const subtitle = document.getElementById('github-decrypt-subtitle');
         if (subtitle) {
-            subtitle.textContent = 'Ingresa tu contraseña de sincronización para conectar con la nube y buscar actualizaciones.';
+            subtitle.textContent = 'Ingresa tu contraseña de sincronización y clave de cifrado para conectar con la nube.';
         }
 
         showToast('Conectado a la nube exitosamente');
@@ -639,10 +668,12 @@ export function skipGithubDecrypt() {
 
 export async function saveGithubSettings() {
     const passInput = document.getElementById('github-pass-input');
+    const encInput = document.getElementById('github-enc-key-input');
     const passVal = passInput ? passInput.value : '';
+    const encVal = encInput ? encInput.value : '';
 
-    if (!passVal) {
-        showToast('Ingresa tu contraseña de sincronización.');
+    if (!passVal || !encVal) {
+        showToast('Ingresa tu contraseña de sincronización y tu clave de cifrado.');
         return;
     }
 
@@ -653,9 +684,11 @@ export async function saveGithubSettings() {
         await callSyncAPI('auth', passVal);
 
         sessionStorage.setItem('github_sync_pass', passVal);
+        sessionStorage.setItem('github_enc_key', encVal);
 
         // Guardar también en localStorage para los 15 días
         localStorage.setItem('github_sync_pass', passVal);
+        localStorage.setItem('github_enc_key', encVal);
         localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
 
         showToast('Conexión establecida con éxito.');
@@ -683,8 +716,9 @@ export function pullFromGithub() {
 
 export async function confirmGithubPull() {
     const password = sessionStorage.getItem('github_sync_pass');
-    if (!password) {
-        showToast('Inicia sesión ingresando tu contraseña de sincronización.');
+    const encKey = sessionStorage.getItem('github_enc_key');
+    if (!password || !encKey) {
+        showToast('Inicia sesión ingresando tu contraseña de sincronización y clave de cifrado.');
         return;
     }
 
@@ -695,7 +729,11 @@ export async function confirmGithubPull() {
 
     try {
         const res = await callSyncAPI('pull', password);
-        const backupData = res.content;
+        let backupData = res.content;
+        if (backupData && backupData.encrypted === true) {
+            const decryptedJson = await decryptText(backupData, encKey);
+            backupData = JSON.parse(decryptedJson);
+        }
 
         // Reemplazo Total (Pisar todo)
         setPosts(backupData.posts || []);

@@ -33,6 +33,25 @@ async function deriveKey(password, salt) {
     );
 }
 
+function uint8ToBase64(bytes) {
+    const chunkSize = 0x8000; // 32 KB por bloque para evitar stack overflow en String.fromCharCode
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return btoa(binary);
+}
+
+function base64ToUint8(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+}
+
 /**
  * Cifra un texto utilizando AES-GCM con una contraseña maestra.
  * @param {string} text - Texto en claro a cifrar
@@ -53,9 +72,9 @@ export async function encryptText(text, password) {
     );
     
     return {
-        ciphertext: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-        salt: btoa(String.fromCharCode(...salt)),
-        iv: btoa(String.fromCharCode(...iv))
+        ciphertext: uint8ToBase64(new Uint8Array(encrypted)),
+        salt: uint8ToBase64(salt),
+        iv: uint8ToBase64(iv)
     };
 }
 
@@ -68,9 +87,9 @@ export async function encryptText(text, password) {
  */
 export async function decryptText(encryptedData, password) {
     try {
-        const salt = new Uint8Array(atob(encryptedData.salt).split('').map(c => c.charCodeAt(0)));
-        const iv = new Uint8Array(atob(encryptedData.iv).split('').map(c => c.charCodeAt(0)));
-        const ciphertext = new Uint8Array(atob(encryptedData.ciphertext).split('').map(c => c.charCodeAt(0)));
+        const salt = base64ToUint8(encryptedData.salt);
+        const iv = base64ToUint8(encryptedData.iv);
+        const ciphertext = base64ToUint8(encryptedData.ciphertext);
         
         const key = await deriveKey(password, salt);
         

@@ -185,15 +185,21 @@
 
             <!-- Composer -->
             <div class="shrink-0 pt-2 pb-2">
-                <div class="flex items-center justify-between px-2 mb-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                    <button type="button" id="aichat-composer-tools-btn" class="inline-flex items-center gap-1 hover:text-google-blue dark:hover:text-google-blueDark transition-colors">
+                <div class="flex items-center justify-between px-2 mb-1.5 text-[11px] text-slate-500 dark:text-slate-400 gap-2">
+                    <button type="button" id="aichat-composer-tools-btn" class="inline-flex items-center gap-1 hover:text-google-blue dark:hover:text-google-blueDark transition-colors truncate">
                         <span>Memoria + Extracto en Caché ·</span>
                         <strong class="font-semibold">Ver 7 Habilidades DB</strong>
                     </button>
-                    <span id="aichat-title-gen-status" class="hidden inline-flex items-center gap-1 text-google-blue dark:text-google-blueDark font-medium">
-                        <span class="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
-                        Generando título...
-                    </span>
+                    <div class="flex items-center gap-2.5 shrink-0">
+                        <span id="ia-cloud-sync-status" class="hidden inline-flex items-center gap-1.5 text-[11px] font-medium">
+                            <span id="ia-cloud-sync-dot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+                            <span id="ia-cloud-sync-text">Sincronizado</span>
+                        </span>
+                        <span id="aichat-title-gen-status" class="hidden inline-flex items-center gap-1 text-google-blue dark:text-google-blueDark font-medium">
+                            <span class="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                            Generando título...
+                        </span>
+                    </div>
                 </div>
 
                 <div class="bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/90 dark:border-slate-700/80 shadow-md px-4 py-2 flex items-end gap-2.5 focus-within:ring-2 focus-within:ring-google-blue/40 dark:focus-within:ring-google-blueDark/40 transition-all">
@@ -452,15 +458,21 @@
             </div>
 
             <div class="overflow-y-auto pr-1 space-y-4 flex-1">
-                <!-- Sesión / Autenticación con /api/ai -->
+                <!-- Sesión / Autenticación con /api/ai y Sync -->
                 <div class="rounded-2xl bg-slate-50 dark:bg-[#1a1c1e] border border-slate-200/80 dark:border-slate-800 p-4">
                     <div class="flex items-center justify-between gap-2 mb-2">
-                        <span class="text-xs font-bold uppercase text-slate-500">Sesión del Servidor (/api/ai)</span>
-                        <span id="ia-session-badge" class="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Sin conectar</span>
+                        <span class="text-xs font-bold uppercase text-slate-500">Sesión del Servidor (/api/ai · Sync)</span>
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="ia-manual-sync-btn" class="hidden px-3 py-1 text-[11px] font-semibold rounded-full bg-slate-200/80 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 transition-colors">☁ Respaldar ahora</button>
+                            <span id="ia-session-badge" class="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200">Sin conectar</span>
+                        </div>
                     </div>
-                    <div id="ia-auth-form" class="flex flex-col sm:flex-row gap-2 mt-2">
-                        <input type="password" id="ia-sync-pass-input" placeholder="Contraseña de sincronización (SYNC_PASSWORD)" autocomplete="off" class="flex-1 px-3.5 py-2 text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue" />
-                        <button type="button" id="ia-sync-connect-btn" class="px-4 py-2 text-xs font-bold rounded-xl bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] hover:shadow-md transition-all shrink-0">Conectar</button>
+                    <div id="ia-auth-form" class="flex flex-col gap-2 mt-2">
+                        <input type="password" id="ia-sync-pass-input" placeholder="Contraseña de sincronización (SYNC_PASSWORD)" autocomplete="off" class="w-full px-3.5 py-2 text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue" />
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <input type="password" id="ia-enc-key-input" placeholder="Clave de cifrado (BACKUP_ENCRYPTION_KEY)" autocomplete="off" class="flex-1 px-3.5 py-2 text-xs bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-google-blue" />
+                            <button type="button" id="ia-sync-connect-btn" class="px-4 py-2 text-xs font-bold rounded-xl bg-google-blue dark:bg-google-blueDark text-white dark:text-[#0c1b32] hover:shadow-md transition-all shrink-0">Conectar</button>
+                        </div>
                     </div>
                 </div>
 
@@ -534,6 +546,7 @@
     <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-full bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold shadow-xl opacity-0 pointer-events-none transition-all duration-200"></div>
 
     <script src="tareas/js/componentes/db.js"></script>
+    <script src="tareas/js/componentes/crypto.js"></script>
     <script src="tareas/js/componentes/categorias.js"></script>
     <script src="tareas/js/componentes/proyectos.js"></script>
     <script src="tareas/js/componentes/helpers.js"></script>

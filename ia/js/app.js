@@ -80,10 +80,174 @@ function showToast(msg) {
   _toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+let _cloudAutoSyncEnabled = false;
+let _dataDirty = false;
+let _autoSyncTimer = null;
+let _isSyncingCloud = false;
+let _autoSyncPending = false;
+let _autoSyncRetryCount = 0;
+let _autoSyncRetryTimer = null;
+const AUTO_SYNC_DEBOUNCE_MS = 3500;
+
+function setIACloudStatus(msg, type = '') {
+  const wrap = document.getElementById('ia-cloud-sync-status');
+  const dot = document.getElementById('ia-cloud-sync-dot');
+  const txt = document.getElementById('ia-cloud-sync-text');
+  if (!wrap || !dot || !txt) return;
+
+  wrap.classList.remove('hidden');
+  txt.textContent = msg;
+
+  let dotCls = 'w-2 h-2 rounded-full ';
+  if (type === 'ok') dotCls += 'bg-emerald-500';
+  else if (type === 'err') dotCls += 'bg-red-500';
+  else if (type === 'loading') dotCls += 'bg-google-blue dark:bg-google-blueDark animate-pulse';
+  else if (type === 'pending') dotCls += 'bg-amber-500 animate-pulse';
+  else dotCls += 'bg-slate-400';
+  dot.className = dotCls;
+}
+
+async function executeIACloudBackup({ silent = false, isAuto = false } = {}) {
+  const password = sessionStorage.getItem('github_sync_pass');
+  const encKey = sessionStorage.getItem('github_enc_key');
+  if (!password || !encKey) {
+    if (!silent) showToast('Conecta tu contraseña de sincronización y clave de cifrado en Ajustes de IA.');
+    return false;
+  }
+
+  setIACloudStatus('Guardando en la nube...', 'loading');
+
+  try {
+    const [
+      taskList, catList, projList, histList, chatList, folderList,
+      orModel, gModel, aiProv,
+      makerCats, savedThemeConfig, cloudAutoSync
+    ] = await Promise.all([
+      dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
+      typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
+      typeof dbGetAllChatFolders === 'function' ? dbGetAllChatFolders() : Promise.resolve([]),
+      dbGetMeta('openRouterModel'),
+      dbGetMeta('googleAIModel'),
+      dbGetMeta('aiProvider'),
+      dbGetMeta('makerCategories'),
+      dbGetMeta('themeConfig'),
+      dbGetMeta('cloudAutoSync')
+    ]);
+
+    const backupData = {
+      version: 1,
+      exported: new Date().toISOString(),
+      tasks: taskList,
+      categories: catList,
+      projects: projList,
+      history: histList,
+      aiChats: chatList,
+      aiChatFolders: folderList,
+      meta: {
+        openRouterModel: orModel || null,
+        googleAIModel: gModel || null,
+        aiProvider: aiProv || null,
+        cloudAutoSync: cloudAutoSync === true,
+        makerCategories: makerCats || [],
+        themeConfig: savedThemeConfig || null
+      }
+    };
+
+    const encryptedPayload = await window.encryptText(JSON.stringify(backupData), encKey);
+    const envelope = {
+      encrypted: true,
+      v: 1,
+      alg: 'AES-256-GCM',
+      kdf: 'PBKDF2-SHA256',
+      iterations: 100000,
+      ...encryptedPayload
+    };
+
+    const response = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        password,
+        module: 'tareas',
+        action: 'push',
+        data: envelope
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Error HTTP ${response.status}`);
+    }
+
+    const res = await response.json();
+    _dataDirty = false;
+    await dbSetMeta('lastBackupTime', backupData.exported);
+    await dbSetMeta('last_backup_sha', res.sha);
+
+    const timeStr = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+    setIACloudStatus('Sincronizado · ' + timeStr, 'ok');
+    if (!silent) showToast('☁ Respaldo cifrado subido a la nube');
+    return true;
+  } catch (e) {
+    console.error('[IASync] Error al respaldar:', e);
+    if (!silent) showToast('Error al respaldar: ' + e.message);
+    setIACloudStatus(isAuto ? 'Error al sincronizar · Reintentando...' : 'Error al subir', 'err');
+    throw e;
+  }
+}
+
+function scheduleAutoSync() {
+  if (!_cloudAutoSyncEnabled) return;
+  if (!sessionStorage.getItem('github_sync_pass') || !sessionStorage.getItem('github_enc_key')) return;
+
+  if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+  if (_autoSyncRetryTimer) clearTimeout(_autoSyncRetryTimer);
+
+  setIACloudStatus('Cambios pendientes...', 'pending');
+  _autoSyncTimer = setTimeout(async () => {
+    _autoSyncTimer = null;
+    await runAutoSync();
+  }, AUTO_SYNC_DEBOUNCE_MS);
+}
+
+async function runAutoSync(force = false) {
+  if (!_cloudAutoSyncEnabled && !force) return;
+  if (!sessionStorage.getItem('github_sync_pass') || !sessionStorage.getItem('github_enc_key')) return;
+
+  if (_isSyncingCloud) {
+    _autoSyncPending = true;
+    return;
+  }
+  if (_autoSyncTimer) {
+    clearTimeout(_autoSyncTimer);
+    _autoSyncTimer = null;
+  }
+
+  _isSyncingCloud = true;
+  try {
+    await executeIACloudBackup({ silent: true, isAuto: true });
+    _autoSyncRetryCount = 0;
+  } catch (err) {
+    _autoSyncRetryCount++;
+    const delay = Math.min(60000, 5000 * Math.pow(2, _autoSyncRetryCount - 1));
+    _autoSyncRetryTimer = setTimeout(() => runAutoSync(), delay);
+  } finally {
+    _isSyncingCloud = false;
+    if (_autoSyncPending) {
+      _autoSyncPending = false;
+      if (_dataDirty) runAutoSync();
+    }
+  }
+}
+
 function markDirty() {
   _aiContextRevision++;
   _aiContextCache = null;
   _aiToolQueryCache.clear();
+  _dataDirty = true;
+  if (_cloudAutoSyncEnabled) {
+    scheduleAutoSync();
+  }
 }
 
 // ── Helpers de fecha y tareas ──
@@ -306,7 +470,13 @@ async function sanitizeAIChatFolderReferences() {
 
 // ── Proxy IA y Autenticación ──
 async function restoreSessionFromLocalStorage() {
-  if (sessionStorage.getItem('github_sync_pass')) return true;
+  const storedEncKey = localStorage.getItem('github_enc_key');
+  if (sessionStorage.getItem('github_sync_pass')) {
+    if (!sessionStorage.getItem('github_enc_key') && storedEncKey) {
+      sessionStorage.setItem('github_enc_key', storedEncKey);
+    }
+    return true;
+  }
   const storedPass = localStorage.getItem('github_sync_pass');
   const savedAtStr = localStorage.getItem('github_sync_pass_saved_at');
   if (!storedPass || !savedAtStr) return false;
@@ -320,6 +490,7 @@ async function restoreSessionFromLocalStorage() {
     });
     if (res.ok) {
       sessionStorage.setItem('github_sync_pass', storedPass);
+      if (storedEncKey) sessionStorage.setItem('github_enc_key', storedEncKey);
       return true;
     }
   } catch (e) {}
@@ -1081,6 +1252,7 @@ async function sendAIChatMessage(prefilledText = null) {
         currentRef.titleGenerated = true;
         currentRef.updatedAt = Date.now();
         await dbPutChat(currentRef);
+        markDirty();
         if (String(currentAIChatId) === String(currentRef.id)) {
           const headerTitle = document.getElementById('aichat-header-title');
           if (headerTitle) headerTitle.textContent = currentRef.title;
@@ -1093,6 +1265,7 @@ async function sendAIChatMessage(prefilledText = null) {
     chat.messages.push({ role: 'assistant', content: `⚠️ **No se pudo completar la respuesta:** ${err.message || 'Verifica tu conexión y Ajustes de IA.'}`, ts: Date.now() });
     chat.updatedAt = Date.now();
     await dbPutChat(chat);
+    markDirty();
     renderActiveAIChatView(true);
   } finally {
     _isAIChatGenerating = false;
@@ -1334,12 +1507,14 @@ async function saveAIChatFolder() {
     if (existing) {
       Object.assign(existing, { name: rawName, icon: rawIcon, color: _selectedChatFolderColor, contextPrompt: capped.text, contextTokens: capped.tokens, updatedAt: nowTs });
       await dbPutChatFolder(existing);
+      markDirty();
       showToast('✓ Carpeta actualizada');
     }
   } else {
     const newFolder = { id: 'folder_' + nowTs + '_' + Math.floor(Math.random() * 1000), name: rawName, icon: rawIcon, color: _selectedChatFolderColor, contextPrompt: capped.text, contextTokens: capped.tokens, createdAt: nowTs, updatedAt: nowTs };
     aiChatFolders.push(newFolder);
     await dbPutChatFolder(newFolder);
+    markDirty();
     showToast(`✓ Carpeta "${rawName}" creada`);
   }
   resetAIChatFolderForm();
@@ -1362,6 +1537,7 @@ async function attemptDeleteAIChatFolder(folderId) {
   if (String(_editingChatFolderId) === String(folder.id)) resetAIChatFolderForm();
   aiChatFolders = aiChatFolders.filter(f => String(f.id) !== String(folder.id));
   await dbDeleteChatFolder(folder.id);
+  markDirty();
   renderAIChatFoldersManageList();
   refreshAIChatUI();
   showToast(`🗑 Carpeta «${folder.name}» eliminada`);
@@ -1443,6 +1619,7 @@ async function assignChatToFolder(chatId, folderId) {
   chat.folderId = validFolder ? validFolder.id : null;
   chat.updatedAt = Date.now();
   await dbPutChat(chat);
+  markDirty();
   closeAssignFolderModal();
   refreshAIChatUI();
   showToast(validFolder ? `📁 Movido a «${validFolder.name}»` : '💬 Movido a Sin carpeta');
@@ -1511,6 +1688,7 @@ async function confirmRenameChat() {
     chat.customTitle = true;
     chat.updatedAt = Date.now();
     await dbPutChat(chat);
+    markDirty();
     renderActiveAIChatView();
     renderAIChatsList();
     showToast('✓ Conversación renombrada');
@@ -1536,6 +1714,7 @@ async function confirmDeleteChat() {
   aiChats = aiChats.filter(c => String(c.id) !== String(targetId));
   await dbDeleteChat(targetId);
   if (String(currentAIChatId) === String(targetId)) currentAIChatId = null;
+  markDirty();
   refreshAIChatUI();
   showToast('🗑 Conversación eliminada');
 }
@@ -1544,14 +1723,25 @@ async function confirmDeleteChat() {
 function updateSessionBadgeUI() {
   const badge = document.getElementById('ia-session-badge');
   const form = document.getElementById('ia-auth-form');
-  const hasSession = Boolean(sessionStorage.getItem('github_sync_pass'));
+  const manualBtn = document.getElementById('ia-manual-sync-btn');
+  const hasPass = Boolean(sessionStorage.getItem('github_sync_pass'));
+  const hasEnc = Boolean(sessionStorage.getItem('github_enc_key'));
+  const fullyConnected = hasPass && hasEnc;
+
   if (badge) {
-    badge.textContent = hasSession ? 'Conectado' : 'Sin conectar';
-    badge.className = hasSession
+    badge.textContent = fullyConnected ? 'Conectado' : (hasPass ? 'Falta clave de cifrado' : 'Sin conectar');
+    badge.className = fullyConnected
       ? 'text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
       : 'text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300';
   }
-  if (form) form.classList.toggle('hidden', hasSession);
+  if (form) {
+    form.classList.toggle('hidden', fullyConnected);
+    const passIn = document.getElementById('ia-sync-pass-input');
+    if (passIn && hasPass && !passIn.value) passIn.value = sessionStorage.getItem('github_sync_pass');
+  }
+  if (manualBtn) {
+    manualBtn.classList.toggle('hidden', !fullyConnected);
+  }
 }
 
 function updateAIProviderUI(activeProvider) {
@@ -1592,17 +1782,27 @@ function wireAISettingsModal() {
   document.getElementById('ai-provider-openrouter-btn')?.addEventListener('click', async () => {
     await dbSetMeta('aiProvider', 'openrouter');
     updateAIProviderUI('openrouter');
+    markDirty();
     showToast('✓ Proveedor activo: OpenRouter');
   });
   document.getElementById('ai-provider-googleai-btn')?.addEventListener('click', async () => {
     await dbSetMeta('aiProvider', 'googleai');
     updateAIProviderUI('googleai');
+    markDirty();
     showToast('✓ Proveedor activo: Google AI Studio');
+  });
+
+  document.getElementById('ia-manual-sync-btn')?.addEventListener('click', async () => {
+    try {
+      await executeIACloudBackup({ silent: false, isAuto: false });
+    } catch (e) {}
   });
 
   document.getElementById('ia-sync-connect-btn')?.addEventListener('click', async () => {
     const passIn = document.getElementById('ia-sync-pass-input');
+    const encIn = document.getElementById('ia-enc-key-input');
     const password = passIn ? passIn.value : '';
+    const encKey = encIn ? encIn.value : '';
     if (!password) { showToast('Ingresa tu contraseña de sincronización'); return; }
     try {
       const res = await fetch('/api/sync', {
@@ -1614,9 +1814,13 @@ function wireAISettingsModal() {
       sessionStorage.setItem('github_sync_pass', password);
       localStorage.setItem('github_sync_pass', password);
       localStorage.setItem('github_sync_pass_saved_at', Date.now().toString());
+      if (encKey) {
+        sessionStorage.setItem('github_enc_key', encKey);
+        localStorage.setItem('github_enc_key', encKey);
+      }
       updateSessionBadgeUI();
       updateAIChatModelBadge();
-      showToast('✓ Sesión conectada con /api/ai');
+      showToast(encKey || sessionStorage.getItem('github_enc_key') ? '✓ Sesión y cifrado conectados' : '✓ Sesión conectada (agrega tu clave de cifrado para respaldar)');
     } catch (e) {
       showToast('✗ ' + (e.message || 'Error al conectar'));
     }
@@ -1631,6 +1835,7 @@ function wireAISettingsModal() {
     try {
       await callAIProxy({ provider: 'openrouter', model, messages: [{ role: 'user', content: 'ping' }], maxTokens: 5 });
       await dbSetMeta('openRouterModel', model);
+      markDirty();
       updateAIChatModelBadge();
       if (msg) msg.textContent = '✓ Guardado y validado';
       showToast('✓ OpenRouter validado');
@@ -1651,6 +1856,7 @@ function wireAISettingsModal() {
     try {
       await callAIProxy({ provider: 'googleai', model: modelRaw, messages: [{ role: 'user', content: 'ping' }], maxTokens: 5 });
       await dbSetMeta('googleAIModel', modelRaw);
+      markDirty();
       updateAIChatModelBadge();
       if (msg) msg.textContent = '✓ Guardado y validado';
       showToast('✓ Google AI Studio validado');
@@ -1679,6 +1885,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Limpiar claves heredadas si existían
   await dbSetMeta('openRouterKey', null).catch(() => {});
   await dbSetMeta('googleAIKey', null).catch(() => {});
+
+  // Sincronización continua compartida con Tareas (cloudAutoSync)
+  const savedAutoSync = await dbGetMeta('cloudAutoSync').catch(() => false);
+  _cloudAutoSyncEnabled = savedAutoSync === true;
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && _cloudAutoSyncEnabled && _dataDirty) {
+      if (_autoSyncTimer) { clearTimeout(_autoSyncTimer); _autoSyncTimer = null; }
+      runAutoSync();
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    if (_cloudAutoSyncEnabled && _dataDirty) {
+      if (_autoSyncTimer) { clearTimeout(_autoSyncTimer); _autoSyncTimer = null; }
+      runAutoSync();
+    }
+  });
+  window.addEventListener('online', () => {
+    if (_cloudAutoSyncEnabled && _dataDirty) {
+      showToast('Conexión restablecida: sincronizando...');
+      runAutoSync();
+    }
+  });
 
   updateAIChatGreeting();
   updateAIChatModelBadge();

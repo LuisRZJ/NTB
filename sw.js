@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ntb-cache-v17';
+const CACHE_NAME = 'ntb-cache-v21';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -8,6 +8,7 @@ const PRECACHE_ASSETS = [
   '/tareas.html',
   '/css/estilos.css',
   '/ia/css/estilos.css',
+  '/ia/js/workspace-tools.js',
   '/ia/js/app.js',
   '/blog/css/estilos.css',
   '/notas/css/estilos.css',

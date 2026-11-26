@@ -3448,6 +3448,9 @@ async function restoreFromPayload(payload) {
     if (Array.isArray(payload.meta.makerCategories)) {
       await dbSetMeta('makerCategories', payload.meta.makerCategories);
     }
+    if (Array.isArray(payload.meta.aiTokenAuditLog)) {
+      await dbSetMeta('aiTokenAuditLog', payload.meta.aiTokenAuditLog.slice(0, 200));
+    }
     if (payload.meta.themeConfig) {
       await dbSetMeta('themeConfig', payload.meta.themeConfig);
       try {
@@ -3505,7 +3508,7 @@ async function exportData() {
       taskList, catList, projList, histList, chatList, folderList,
       orModel, gModel, aiProv,
       makerCats, savedThemeConfig,
-      cloudAutoSync
+      cloudAutoSync, tokenAuditLog
     ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
       typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
@@ -3514,7 +3517,8 @@ async function exportData() {
       dbGetMeta('googleAIModel'),
       dbGetMeta('aiProvider'),
       dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
-      dbGetMeta('cloudAutoSync')
+      dbGetMeta('cloudAutoSync'),
+      dbGetMeta('aiTokenAuditLog')
     ]);
     const payload = {
       version: 1,
@@ -3531,7 +3535,8 @@ async function exportData() {
         aiProvider: aiProv || null,
         cloudAutoSync: cloudAutoSync === true,
         makerCategories: makerCats || [],
-        themeConfig: savedThemeConfig || null
+        themeConfig: savedThemeConfig || null,
+        aiTokenAuditLog: Array.isArray(tokenAuditLog) ? tokenAuditLog : []
       }
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -3880,7 +3885,7 @@ async function executeCloudBackup(options = {}) {
       taskList, catList, projList, histList, chatList, folderList,
       orModel, gModel, aiProv,
       makerCats, savedThemeConfig,
-      cloudAutoSync
+      cloudAutoSync, tokenAuditLog
     ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
       typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
@@ -3889,7 +3894,8 @@ async function executeCloudBackup(options = {}) {
       dbGetMeta('googleAIModel'),
       dbGetMeta('aiProvider'),
       dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
-      dbGetMeta('cloudAutoSync')
+      dbGetMeta('cloudAutoSync'),
+      dbGetMeta('aiTokenAuditLog')
     ]);
 
     const backupData = {
@@ -3907,7 +3913,8 @@ async function executeCloudBackup(options = {}) {
         aiProvider: aiProv || null,
         cloudAutoSync: cloudAutoSync === true,
         makerCategories: makerCats || [],
-        themeConfig: savedThemeConfig || null
+        themeConfig: savedThemeConfig || null,
+        aiTokenAuditLog: Array.isArray(tokenAuditLog) ? tokenAuditLog : []
       }
     };
 

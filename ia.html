@@ -124,7 +124,7 @@
                     </div>
                     <h2 id="aichat-greeting" class="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-slate-800 dark:text-slate-100 mb-2">¿En qué nos enfocamos hoy?</h2>
                     <p class="text-xs sm:text-sm md:text-base text-slate-500 dark:text-slate-400 max-w-xl mx-auto mb-4">
-                        Tu asistente inteligente conectado en tiempo real a la base de datos de tus <strong>Tareas</strong>, proyectos, métricas e historial.
+                        Tu asistente inteligente conectado en tiempo real a tus <strong>Tareas, Notas, Blog y Chats</strong>.
                     </p>
 
                     <div class="flex flex-wrap items-center justify-center gap-2 mb-5">
@@ -157,13 +157,13 @@
                             <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Detecta cuellos de botella crónicos y divídelos en pasos simples.</div>
                         </button>
 
-                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Consulta mis proyectos activos y mis métricas de rendimiento para darme un diagnóstico de avance y balance Maker vs Manager.">
+                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Haz un panorama general de mi workspace (Tareas, Notas y Blog) y dime qué requiere atención hoy.">
                             <div class="flex items-center justify-between mb-2">
-                                <span class="material-symbols-outlined text-blue-500 text-xl">analytics</span>
-                                <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">Proyectos y Métricas</span>
+                                <span class="material-symbols-outlined text-blue-500 text-xl">hub</span>
+                                <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">Multi-Módulo</span>
                             </div>
-                            <div class="font-bold text-sm text-slate-800 dark:text-slate-100 mb-1 group-hover:text-google-blue dark:group-hover:text-google-blueDark transition-colors">Auditoría de proyectos y ritmo</div>
-                            <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Evalúa la carga de mis proyectos y mi porcentaje de trabajo profundo.</div>
+                            <div class="font-bold text-sm text-slate-800 dark:text-slate-100 mb-1 group-hover:text-google-blue dark:group-hover:text-google-blueDark transition-colors">Panorama del workspace</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Cruza mis Tareas, Notas, entradas de Blog y bases embebidas.</div>
                         </button>
 
                         <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Ayúdame a planificar un nuevo objetivo y estructurarlo en tareas accionables dentro de mi planeador.">
@@ -261,6 +261,133 @@
             <div id="aichat-chats-list" class="space-y-3 pb-4"></div>
         </section>
 
+        <!-- Vista Auditoría de Tokens, Costos y Uso -->
+        <section class="aichat-view hidden flex-1 min-h-0 flex flex-col overflow-y-auto py-4" id="aichat-view-audit">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">Uso, Costos y Caché de IA</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Consumo financiero en USD, métricas generales de actividad y eficiencia de caché.</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select id="aichat-audit-period" aria-label="Filtrar periodo de auditoría" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 focus:outline-none">
+                        <option value="all">Todo</option>
+                        <option value="today">Hoy</option>
+                        <option value="7d">7 días</option>
+                        <option value="30d">30 días</option>
+                    </select>
+                    <select id="aichat-audit-scope" aria-label="Filtrar alcance de auditoría" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-[#202124] border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 focus:outline-none">
+                        <option value="all">Todas las llamadas</option>
+                        <option value="current">Chat actual</option>
+                    </select>
+                    <button type="button" id="aichat-audit-clear-btn" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border border-rose-200 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-colors">
+                        <span class="material-symbols-outlined text-[15px]">delete_sweep</span>
+                        <span>Limpiar</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- KPIs Financieros (USD) -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-blue-200/80 dark:border-blue-800/60 p-3.5 shadow-sm">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Gasto Total</span>
+                        <span id="audit-kpi-cost-source" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">Sin tarifa</span>
+                    </div>
+                    <div id="audit-kpi-cost" class="mt-1 text-xl font-bold text-slate-900 dark:text-slate-100">$0.00</div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-emerald-200/80 dark:border-emerald-800/60 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Ahorro por Caché</div>
+                    <div id="audit-kpi-saved" class="mt-1 text-xl font-bold text-emerald-600 dark:text-emerald-400">$0.00</div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Costo / Llamada</div>
+                    <div id="audit-kpi-avg-cost" class="mt-1 text-xl font-bold text-slate-900 dark:text-slate-100">$0.00</div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Hoy / 7 días</div>
+                    <div class="mt-1 flex items-baseline gap-2">
+                        <span id="audit-kpi-today-cost" class="text-xl font-bold text-slate-900 dark:text-slate-100">$0.00</span>
+                        <span id="audit-kpi-7d-cost" class="text-xs font-semibold text-slate-500 dark:text-slate-400">7d: $0.00</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KPIs de Tokens -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Tokens Entrada</div>
+                    <div id="audit-kpi-prompt" class="mt-1 text-xl font-bold text-slate-900 dark:text-slate-100">0</div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-emerald-200/80 dark:border-emerald-800/60 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">En Caché</div>
+                    <div class="mt-1 flex items-baseline gap-2">
+                        <span id="audit-kpi-cached" class="text-xl font-bold text-emerald-600 dark:text-emerald-400">0</span>
+                        <span id="audit-kpi-ratio" class="text-xs font-semibold text-emerald-700/80 dark:text-emerald-300/80">0%</span>
+                    </div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Tokens Salida</div>
+                    <div id="audit-kpi-completion" class="mt-1 text-xl font-bold text-slate-900 dark:text-slate-100">0</div>
+                </div>
+                <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm">
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total / Llamadas</div>
+                    <div class="mt-1 flex items-baseline gap-2">
+                        <span id="audit-kpi-total" class="text-xl font-bold text-slate-900 dark:text-slate-100">0</span>
+                        <span id="audit-kpi-calls" class="text-xs font-semibold text-slate-500 dark:text-slate-400">0 llamadas</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Barra de eficiencia de caché -->
+            <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-4 mb-4 shadow-sm">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">Eficiencia de Caché de Prompt</span>
+                    <span id="audit-cache-bar-label" class="text-xs font-bold text-emerald-600 dark:text-emerald-400">0%</span>
+                </div>
+                <div class="w-full h-2.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div id="audit-cache-bar-fill" class="h-full rounded-full bg-emerald-500 transition-all duration-300" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <!-- Uso General -->
+            <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-4 mb-4 shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Uso General</h3>
+                    <div id="audit-gen-breakdown" class="flex flex-wrap items-center gap-1.5 text-[11px]"></div>
+                </div>
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div>
+                        <div class="text-[11px] text-slate-500 dark:text-slate-400">Chats / Carpetas</div>
+                        <div id="audit-gen-chats" class="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">0 / 0</div>
+                    </div>
+                    <div>
+                        <div class="text-[11px] text-slate-500 dark:text-slate-400">Mensajes</div>
+                        <div id="audit-gen-messages" class="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">0</div>
+                    </div>
+                    <div>
+                        <div class="text-[11px] text-slate-500 dark:text-slate-400">Prom. Tokens / Llamada</div>
+                        <div id="audit-gen-avg-tokens" class="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">0</div>
+                    </div>
+                    <div>
+                        <div class="text-[11px] text-slate-500 dark:text-slate-400">Latencia Promedio</div>
+                        <div id="audit-gen-avg-latency" class="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Consumo por Modelo -->
+            <div class="mb-4">
+                <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Consumo por Modelo</h3>
+                <div id="aichat-audit-models" class="grid grid-cols-1 md:grid-cols-2 gap-2.5"></div>
+            </div>
+
+            <!-- Historial cronológico -->
+            <div id="aichat-audit-list" class="space-y-2.5 pb-2"></div>
+            <p class="text-[11px] text-slate-400 dark:text-slate-500 pt-2 pb-4">
+                Nota: OpenRouter reporta el costo real (<code>usage.cost</code>) cuando el proveedor lo incluye; Google AI Studio y modelos sin costo directo muestran un cálculo estimado en USD según tarifas públicas de referencia.
+            </p>
+        </section>
+
     </main>
 
     <!-- Navegación Inferior Acoplada -->
@@ -274,6 +401,10 @@
                 <span class="material-symbols-outlined text-[18px]">forum</span>
                 <span>Chats</span>
                 <span id="aichat-total-badge" class="px-2 py-0.5 text-[11px] rounded-full bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold">0</span>
+            </button>
+            <button type="button" class="aichat-bnav-tab inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs md:text-sm font-semibold transition-all" data-aichat-tab="audit" id="aichat-tab-audit">
+                <span class="material-symbols-outlined text-[18px]">monitoring</span>
+                <span>Tokens</span>
             </button>
         </nav>
     </footer>
@@ -426,7 +557,7 @@
                 <div>
                     <div class="text-[11px] font-bold tracking-wider uppercase text-google-blue dark:text-google-blueDark mb-0.5">Arquitectura Agéntica · 7 Habilidades DB</div>
                     <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100">Herramientas y Contexto de tu IA</h3>
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">El asistente puede invocar hasta 3 rondas de herramientas por mensaje para consultar o actualizar tu base de datos de Tareas (`TareasDB`) en tiempo real.</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">El asistente puede invocar hasta 5 rondas de herramientas en paralelo para consultar Tareas, Notas, Blog y Chats, o crear/actualizar tareas en <code>TareasDB</code>.</p>
                 </div>
                 <button type="button" id="aichat-tools-modal-close" class="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500" title="Cerrar">
                     <span class="material-symbols-outlined text-[20px]">close</span>
@@ -551,6 +682,7 @@
     <script src="tareas/js/componentes/proyectos.js"></script>
     <script src="tareas/js/componentes/helpers.js"></script>
     <script src="tareas/js/componentes/markdown.js"></script>
+    <script src="ia/js/workspace-tools.js"></script>
     <script src="ia/js/app.js"></script>
     <script src="sw-register.js"></script>
 </body>

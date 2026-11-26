@@ -54,6 +54,7 @@ if (typeof systemDarkQuery.addEventListener === 'function') {
 let tasks = [];
 let aiChats = [];
 let aiChatFolders = [];
+let aiTokenAuditLog = [];
 let _toastTimer = null;
 let _aiContextRevision = 0;
 let _aiContextCache = null;
@@ -70,6 +71,87 @@ const AI_HISTORY_WINDOW_MAX = 18;
 const AI_HISTORY_RECENT_KEEP = 16;
 const AI_CONTEXT_CACHE_TTL_MS = 60000;
 const FOLDER_CONTEXT_MAX_TOKENS = 5000;
+const AI_TOKEN_AUDIT_MAX = 200;
+
+async function loadTokenAuditLog() {
+  const saved = await dbGetMeta('aiTokenAuditLog').catch(() => null);
+  aiTokenAuditLog = Array.isArray(saved) ? saved.slice(0, AI_TOKEN_AUDIT_MAX) : [];
+}
+
+function mergeUsageTotals(acc, usage) {
+  if (!usage) return acc;
+  const promptTokens = (acc.promptTokens || 0) + (Number(usage.promptTokens) || 0);
+  const cachedTokens = (acc.cachedTokens || 0) + (Number(usage.cachedTokens) || 0);
+  const cacheWriteTokens = (acc.cacheWriteTokens || 0) + (Number(usage.cacheWriteTokens) || 0);
+  const completionTokens = (acc.completionTokens || 0) + (Number(usage.completionTokens) || 0);
+  const totalTokens = (acc.totalTokens || 0) + (Number(usage.totalTokens) || 0);
+  const costUsd = Number(((acc.costUsd || 0) + (Number(usage.costUsd) || 0)).toFixed(6));
+  const savedUsd = Number(((acc.savedUsd || 0) + (Number(usage.savedUsd) || 0)).toFixed(6));
+  const prevSrc = acc.costSource;
+  const nextSrc = usage.costSource || 'unknown';
+  let costSource = prevSrc || nextSrc;
+  if (prevSrc && prevSrc !== nextSrc) {
+    costSource = (prevSrc === 'unknown' || nextSrc === 'unknown')
+      ? (prevSrc === 'unknown' ? nextSrc : prevSrc)
+      : 'mixed';
+  }
+  const cacheHitRatio = promptTokens > 0 ? Number(Math.min(1, cachedTokens / promptTokens).toFixed(4)) : 0;
+  return {
+    promptTokens,
+    cachedTokens,
+    cacheWriteTokens,
+    completionTokens,
+    totalTokens,
+    cacheHitRatio,
+    cacheMode: usage.cacheMode || acc.cacheMode || 'implicit',
+    costUsd,
+    savedUsd,
+    costSource
+  };
+}
+
+async function recordTokenAuditEntry({ kind = 'chat', chatId = null, chatTitle = '', provider = '', model = '', usage = null, durationMs = 0 }) {
+  if (!usage) return;
+  const entry = {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    ts: Date.now(),
+    kind,
+    chatId: chatId ? String(chatId) : null,
+    chatTitle: String(chatTitle || 'Chat sin título'),
+    provider: String(provider || ''),
+    model: String(model || ''),
+    promptTokens: Number(usage.promptTokens) || 0,
+    cachedTokens: Number(usage.cachedTokens) || 0,
+    cacheWriteTokens: Number(usage.cacheWriteTokens) || 0,
+    completionTokens: Number(usage.completionTokens) || 0,
+    totalTokens: Number(usage.totalTokens) || 0,
+    cacheHitRatio: Number(usage.cacheHitRatio) || 0,
+    cacheMode: usage.cacheMode || 'implicit',
+    costUsd: Number(usage.costUsd) || 0,
+    savedUsd: Number(usage.savedUsd) || 0,
+    costSource: usage.costSource || 'unknown',
+    durationMs: Math.max(0, Number(durationMs) || 0)
+  };
+  aiTokenAuditLog.unshift(entry);
+  if (aiTokenAuditLog.length > AI_TOKEN_AUDIT_MAX) {
+    aiTokenAuditLog = aiTokenAuditLog.slice(0, AI_TOKEN_AUDIT_MAX);
+  }
+  await dbSetMeta('aiTokenAuditLog', aiTokenAuditLog).catch(() => {});
+  if (typeof markDirty === 'function') markDirty();
+  if (activeAIChatTab === 'audit') {
+    renderAIAuditView();
+  }
+}
+
+async function clearTokenAuditLog() {
+  aiTokenAuditLog = [];
+  await dbSetMeta('aiTokenAuditLog', []).catch(() => {});
+  if (typeof markDirty === 'function') markDirty();
+  if (activeAIChatTab === 'audit') {
+    renderAIAuditView();
+  }
+  showToast('Historial de auditoría de tokens limpiado');
+}
 
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -121,7 +203,7 @@ async function executeIACloudBackup({ silent = false, isAuto = false } = {}) {
     const [
       taskList, catList, projList, histList, chatList, folderList,
       orModel, gModel, aiProv,
-      makerCats, savedThemeConfig, cloudAutoSync
+      makerCats, savedThemeConfig, cloudAutoSync, tokenAuditLog
     ] = await Promise.all([
       dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
       typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
@@ -131,7 +213,8 @@ async function executeIACloudBackup({ silent = false, isAuto = false } = {}) {
       dbGetMeta('aiProvider'),
       dbGetMeta('makerCategories'),
       dbGetMeta('themeConfig'),
-      dbGetMeta('cloudAutoSync')
+      dbGetMeta('cloudAutoSync'),
+      dbGetMeta('aiTokenAuditLog')
     ]);
 
     const backupData = {
@@ -149,7 +232,8 @@ async function executeIACloudBackup({ silent = false, isAuto = false } = {}) {
         aiProvider: aiProv || null,
         cloudAutoSync: cloudAutoSync === true,
         makerCategories: makerCats || [],
-        themeConfig: savedThemeConfig || null
+        themeConfig: savedThemeConfig || null,
+        aiTokenAuditLog: Array.isArray(tokenAuditLog) ? tokenAuditLog : []
       }
     };
 
@@ -244,6 +328,7 @@ function markDirty() {
   _aiContextRevision++;
   _aiContextCache = null;
   _aiToolQueryCache.clear();
+  if (window.WorkspaceTools) window.WorkspaceTools.invalidateCache();
   _dataDirty = true;
   if (_cloudAutoSyncEnabled) {
     scheduleAutoSync();
@@ -538,16 +623,18 @@ async function callAIChatProvider(messages, systemInstruction, options = {}) {
     showToast('⚠️ Conecta tu sesión en Ajustes de IA para continuar');
     throw new Error('Falta conectar la sesión en Ajustes de IA.');
   }
-  return await callAIProxy({
+  const t0 = Date.now();
+  const res = await callAIProxy({
     provider: cfg.provider,
     model: cfg.model,
     messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
     systemInstruction: systemInstruction || undefined,
     maxTokens: options.maxTokens
   });
+  return { ...res, durationMs: Date.now() - t0 };
 }
 
-// ── Contexto Base y 7 Herramientas DB (Solo módulo de Tareas) ──
+// ── Contexto Base Multi-Módulo y Bucle Agéntico ──
 async function buildAISystemContext() {
   const today = todayISO();
   const nowMs = Date.now();
@@ -587,28 +674,33 @@ async function buildAISystemContext() {
   const catSummary = Object.entries(CATS).map(([k, c]) => `${k}: ${c.label}${makerCats.includes(k) ? ' [Maker]' : ''}`).join(' · ');
   const daysName = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date().getDay()];
 
-  const prompt = `Eres el Asistente IA de NTB Workspace, conectado únicamente a los datos del módulo "Daily Planner" (Tareas).
+  let extSummary = { notas: { initialized: false, activeCount: 0, labels: [] }, blog: { initialized: false, activeCount: 0, labels: [] } };
+  if (window.WorkspaceTools) {
+    extSummary = await window.WorkspaceTools.getQuickWorkspaceSummary().catch(() => extSummary);
+  }
+
+  const prompt = `Eres el Asistente IA de NTB Workspace, con acceso transversal en tiempo real a los datos de Tareas (TareasDB), Notas (GoogleKeepNotesDB), Blog (BlogEditorDB, incluyendo bases de datos embebidas) y Chats anteriores.
 Responde siempre en español con un tono profesional, cálido, directo y analítico. Utiliza formato Markdown claro.
 
-=== HABILIDADES Y HERRAMIENTAS DE BASE DE DATOS (TOOL CALLING) ===
-Tienes acceso directo a la base de datos IndexedDB de Tareas del usuario mediante 7 habilidades.
-Cuando necesites consultar más tareas o cuando el usuario te pida crear, completar o modificar una tarea, emite ÚNICAMENTE un bloque con este formato exacto:
+=== HABILIDADES Y HERRAMIENTAS DE WORKSPACE (TOOL CALLING) ===
+Puedes emitir uno o varios bloques <tool_call>...</tool_call> en una misma respuesta (hasta 5 rondas):
 <tool_call>{"tool": "NOMBRE_HERRAMIENTA", "args": {...}}</tool_call>
 
 Herramientas disponibles:
-1. "search_tasks": { "query": "texto", "status": "pending|done|overdue|all", "priority": "high|mid|low", "category": "clave_cat", "projectId": id, "dateFrom": "YYYY-MM-DD", "dateTo": "YYYY-MM-DD", "includeSubtasks": true|false, "limit": 25 }
-2. "get_task_details": { "taskId": id_de_la_tarea }
-3. "get_project_tasks": { "projectId": id_opcional, "projectName": "nombre_opcional" }
-4. "get_activity_history": { "days": 14, "type": "all|created|completed", "limit": 40 }
-5. "get_productivity_metrics": { "monthOffset": 0 }
-6. "create_task": { "title": "Título", "desc": "Markdown", "pri": "high|mid|low", "due": "YYYY-MM-DD", "dueTime": "HH:MM", "cat": "clave_cat", "project": "id_proyecto", "subtasks": ["Subtarea 1"] }
-7. "update_task_status": { "taskId": id, "done": true|false, "due": "YYYY-MM-DD", "dueTime": "HH:MM", "pri": "high|mid|low", "title": "Nuevo título" }
+1. "workspace_overview": Panorama general de Tareas, Notas, Blog y Chats (conteos, etiquetas, proyectos y 5 recientes). args: {}
+2. "search_workspace": Búsqueda flexible multi-módulo. args: { "modules": ["tareas","notas","blog","chats"], "query": "texto", "labels": ["etiqueta"], "status": "all|pending|done|overdue|pinned", "priority": "high|mid|low", "projectId": id, "dateFrom": "YYYY-MM-DD", "dateTo": "YYYY-MM-DD", "includeArchived": false, "includeTrash": false, "limit": 20 }
+3. "get_item_details": Lee el contenido completo de un elemento (en Blog convierte HTML a texto limpio e incluye databases embebidas). args: { "module": "tareas|notas|blog|chats", "id": id, "includeHistory": false, "includeDatabases": true, "includeSubtasks": true }
+4. "query_collection": Consulta declarativa sobre colecciones ("tasks", "projects", "categories", "history", "notes", "note_labels", "posts", "blog_labels", "blog_databases", "ai_chats", "ai_chat_folders"). args: { "collection": "...", "filters": {...}, "sortBy": "campo", "order": "asc|desc", "groupBy": "campo", "summaryOnly": false, "limit": 25, "offset": 0 }
+5. "get_productivity_metrics": Métricas avanzadas de Tareas (Win Rate, Cycle Time, racha semanal, Maker vs Manager). args: { "monthOffset": 0 }
+6. "create_task": Crea una tarea real en TareasDB. args: { "title": "Título", "desc": "Markdown", "pri": "high|mid|low", "due": "YYYY-MM-DD", "dueTime": "HH:MM", "cat": "clave_cat", "project": "id_proyecto", "subtasks": ["Subtarea 1"] }
+7. "update_task_status": Actualiza una tarea existente en TareasDB. args: { "taskId": id, "done": true|false, "due": "YYYY-MM-DD", "dueTime": "HH:MM", "pri": "high|mid|low", "title": "Nuevo título" }
 
-=== EXTRACTO BASE EN CACHÉ (ESTADO ACTUAL DE TAREAS) ===
+=== EXTRACTO BASE EN CACHÉ ===
 Fecha actual: ${daysName}, ${today}
-Resumen global: ${pendingTop.length} tareas principales pendientes · ${overdueTop.length} vencidas · ${doneToday.length} completadas hoy · ${tasks.length} registros totales.
-Proyectos activos: ${projSummary}
-Categorías disponibles: ${catSummary}
+Tareas: ${pendingTop.length} pendientes · ${overdueTop.length} vencidas · ${doneToday.length} completadas hoy · Proyectos: ${projSummary} · Categorías: ${catSummary}
+Notas: ${extSummary.notas.initialized ? `${extSummary.notas.activeCount} activas · Etiquetas: ${extSummary.notas.labels.join(', ') || 'ninguna'}` : 'Aún no inicializado en este navegador'}
+Blog: ${extSummary.blog.initialized ? `${extSummary.blog.activeCount} entradas activas · Etiquetas: ${extSummary.blog.labels.join(', ') || 'ninguna'}` : 'Aún no inicializado en este navegador'}
+Chats guardados: ${aiChats.length} conversaciones en ${aiChatFolders.length} carpeta(s).
 
 [TAREAS DE HOY (${todayLines.length})]:
 ${todayLines.length ? todayLines.join('\n') : '(Sin tareas programadas específicamente para hoy)'}
@@ -624,7 +716,12 @@ ${upcomingLines.length ? upcomingLines.join('\n') : '(Sin tareas programadas par
     revision: _aiContextRevision,
     ts: nowMs,
     prompt,
-    stats: { pendingCount: pendingTop.length, overdueCount: overdueTop.length, projectsCount: PROJECTS.length }
+    stats: {
+      pendingCount: pendingTop.length,
+      overdueCount: overdueTop.length,
+      notesCount: extSummary.notas.activeCount,
+      postsCount: extSummary.blog.activeCount
+    }
   };
 
   updateAIChatContextPill(_aiContextCache.stats);
@@ -635,8 +732,9 @@ function updateAIChatContextPill(stats) {
   const pillText = document.getElementById('aichat-context-pill-text');
   if (!pillText) return;
   const pend = stats ? stats.pendingCount : tasks.filter(t => !t.parentId && !t.done).length;
-  const over = stats ? stats.overdueCount : tasks.filter(t => !t.parentId && isTaskOverdue(t)).length;
-  pillText.textContent = `Tareas en caché: ${pend} pendiente${pend === 1 ? '' : 's'}${over > 0 ? ` (${over} vencida${over === 1 ? '' : 's'})` : ''} · ${PROJECTS.length} proyecto${PROJECTS.length === 1 ? '' : 's'} · 7 habilidades`;
+  const notesC = stats && typeof stats.notesCount === 'number' ? stats.notesCount : 0;
+  const postsC = stats && typeof stats.postsCount === 'number' ? stats.postsCount : 0;
+  pillText.textContent = `Tareas: ${pend} pend · Notas: ${notesC} · Blog: ${postsC} · 7 habilidades`;
 }
 
 function buildSlidingChatHistory(messages) {
@@ -654,201 +752,88 @@ function buildSlidingChatHistory(messages) {
   return [...firstTwo, { role: 'user', content: `[Resumen de ${middle.length} mensajes intermedios:\n${middleDigest}]` }, ...recent];
 }
 
-async function executeAITool(toolName, rawArgs = {}) {
-  const args = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-  const isReadOnly = ['search_tasks', 'get_task_details', 'get_project_tasks', 'get_activity_history', 'get_productivity_metrics'].includes(toolName);
-  const cacheKey = isReadOnly ? `${_aiContextRevision}:${toolName}:${JSON.stringify(args)}` : null;
-  if (cacheKey && _aiToolQueryCache.has(cacheKey)) return _aiToolQueryCache.get(cacheKey);
-
-  let output = null;
-  try {
-    if (toolName === 'search_tasks') {
-      const q = String(args.query || '').trim().toLowerCase();
-      const status = args.status || 'all';
-      const pri = args.priority || '';
-      const cat = args.category || '';
-      const projId = args.projectId !== undefined && args.projectId !== null ? String(args.projectId) : '';
-      const dateFrom = args.dateFrom || '';
-      const dateTo = args.dateTo || '';
-      const incSubs = !!args.includeSubtasks;
-      const limit = Math.min(60, Math.max(1, Number(args.limit) || 25));
-
-      let pool = tasks.filter(t => incSubs ? true : !t.parentId);
-      if (status === 'pending') pool = pool.filter(t => !t.done);
-      else if (status === 'done') pool = pool.filter(t => t.done);
-      else if (status === 'overdue') pool = pool.filter(t => isTaskOverdue(t));
-      if (pri) pool = pool.filter(t => t.pri === pri);
-      if (cat) pool = pool.filter(t => getTaskCats(t).includes(cat));
-      if (projId) {
-        pool = pool.filter(t => {
-          if (String(t.project) === projId) return true;
-          const pObj = getProjectById(Number(t.project));
-          return pObj && pObj.name.toLowerCase().includes(projId.toLowerCase());
-        });
-      }
-      if (dateFrom) pool = pool.filter(t => (t.due || t.doneAt || '') >= dateFrom);
-      if (dateTo) pool = pool.filter(t => (t.due || t.doneAt || '') <= dateTo);
-      if (q) pool = pool.filter(t => (t.text && t.text.toLowerCase().includes(q)) || (t.desc && t.desc.toLowerCase().includes(q)));
-
-      const results = pool.slice(0, limit).map(t => ({
-        id: t.id, title: t.text, descPreview: t.desc ? t.desc.slice(0, 180) : '', done: !!t.done, doneAt: t.doneAt || null,
-        priority: t.pri || 'mid', due: t.due || null, dueTime: t.dueTime || null,
-        categories: getTaskCats(t).map(k => CATS[k]?.label || k),
-        project: t.project ? (getProjectById(Number(t.project))?.name || t.project) : null,
-        snoozeCount: Array.isArray(t.snoozedDates) ? t.snoozedDates.length : 0, subtasksCount: getSubtasks(t.id).length
-      }));
-      output = { badgeLabel: `🔍 Búsqueda en BD: ${results.length} tarea(s)`, data: { totalMatched: pool.length, returned: results.length, tasks: results } };
-
-    } else if (toolName === 'get_task_details') {
-      const t = tasks.find(x => String(x.id) === String(args.taskId));
-      if (!t) {
-        output = { badgeLabel: `🔍 Tarea #${args.taskId}: no encontrada`, data: { error: `No se encontró tarea con ID ${args.taskId}` } };
-      } else {
-        output = {
-          badgeLabel: `📄 Detalle: "${t.text.slice(0, 32)}"`,
-          data: {
-            id: t.id, title: t.text, descriptionMarkdown: t.desc || '(Sin descripción)', done: !!t.done, doneAt: t.doneAt || null,
-            priority: t.pri || 'mid', due: t.due || null, dueTime: t.dueTime || null,
-            repeat: t.repeat ? formatRepeat(t.repeat) : null,
-            categories: getTaskCats(t).map(k => CATS[k]?.label || k),
-            project: t.project ? (getProjectById(Number(t.project))?.name || null) : null,
-            snoozedDates: t.snoozedDates || [],
-            subtasks: getSubtasks(t.id).map(s => ({ id: s.id, title: s.text, done: !!s.done, doneAt: s.doneAt || null, priority: s.pri || 'mid' }))
-          }
-        };
-      }
-
-    } else if (toolName === 'get_project_tasks') {
-      const pId = args.projectId;
-      const pName = String(args.projectName || '').trim().toLowerCase();
-      let targetProjects = PROJECTS;
-      if (pId !== undefined && pId !== null && pId !== '') targetProjects = PROJECTS.filter(p => String(p.id) === String(pId));
-      else if (pName) targetProjects = PROJECTS.filter(p => p.name.toLowerCase().includes(pName));
-
-      const projectDetails = targetProjects.map(p => {
-        const pTasks = tasks.filter(t => !t.parentId && String(t.project) === String(p.id));
-        return {
-          id: p.id, name: p.name, description: p.desc || '', totalTasks: pTasks.length,
-          pendingCount: pTasks.filter(t => !t.done).length, completedCount: pTasks.filter(t => t.done).length,
-          overdueCount: pTasks.filter(t => isTaskOverdue(t)).length,
-          tasks: pTasks.slice(0, 30).map(t => ({ id: t.id, title: t.text, done: !!t.done, priority: t.pri || 'mid', due: t.due || null }))
-        };
-      });
-      output = { badgeLabel: `◫ Proyectos consultados (${projectDetails.length})`, data: { projects: projectDetails } };
-
-    } else if (toolName === 'get_activity_history') {
-      const days = Math.min(90, Math.max(1, Number(args.days) || 14));
-      const type = args.type || 'all';
-      const limit = Math.min(80, Math.max(1, Number(args.limit) || 40));
-      const cutoffIso = new Date(Date.now() - days * 86400000).toISOString();
-      const allHist = await dbGetHistory();
-      let filtered = allHist.filter(h => (h.ts || '') >= cutoffIso);
-      if (type === 'created') filtered = filtered.filter(h => h.type === 'created' || h.type === 'migrated');
-      else if (type === 'completed') filtered = filtered.filter(h => h.type === 'completed');
-      filtered.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
-      output = {
-        badgeLabel: `🕒 Historial (${Math.min(limit, filtered.length)} eventos en ${days}d)`,
-        data: { daysAnalyzed: days, totalEvents: filtered.length, events: filtered.slice(0, limit).map(h => ({ type: h.type, taskTitle: h.taskText, priority: h.taskPri || 'mid', timestamp: h.ts })) }
-      };
-
-    } else if (toolName === 'get_productivity_metrics') {
-      const offset = Number(args.monthOffset) || 0;
-      const nowD = new Date();
-      const viewYear = nowD.getFullYear() + Math.floor((nowD.getMonth() + offset) / 12);
-      const viewMonth = ((nowD.getMonth() + offset) % 12 + 12) % 12;
-      const done = tasks.filter(t => t.done);
-      const makerCats = (await dbGetMeta('makerCategories').catch(() => null)) || [];
-      output = {
-        badgeLabel: `📊 Métricas analizadas`,
-        data: {
-          month: `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`,
-          winRatePercent: calcWinRate(tasks, viewYear, viewMonth),
-          avgCycleTimeDays: calcCycleTime(done),
-          weeklyStreak: calcWeekStreak(done).count,
-          makerImpactFactor: calcImpactFactor(done, makerCats)
-        }
-      };
-
-    } else if (toolName === 'create_task') {
-      const title = String(args.title || '').trim();
-      if (!title) {
-        output = { badgeLabel: '⚠️ Falta título', data: { error: 'El campo title es obligatorio' } };
-      } else {
-        const pri = ['high', 'mid', 'low'].includes(args.pri) ? args.pri : 'mid';
-        const due = args.due ? String(args.due).trim() : todayISO();
-        const dueTime = args.dueTime ? String(args.dueTime).trim() : '';
-        const desc = args.desc ? String(args.desc).trim() : '';
-        const cats = args.cat && CATS[args.cat] ? [args.cat] : [];
-        let projId = '';
-        if (args.project) {
-          const foundProj = PROJECTS.find(p => String(p.id) === String(args.project) || p.name.toLowerCase() === String(args.project).toLowerCase());
-          if (foundProj) projId = String(foundProj.id);
-        }
-        const newId = Date.now();
-        const newTask = { id: newId, text: title, desc, cats, cat: cats[0] || '', pri, project: projId, due, origDue: due, dueTime, repeat: '', done: false };
-        tasks.unshift(newTask);
-        await dbPut(newTask);
-        await dbAddHistory({ id: Date.now() + Math.floor(Math.random() * 999), type: 'created', taskId: newId, taskText: title, taskPri: pri, cats, ts: new Date().toISOString() });
-
-        const createdSubs = [];
-        if (Array.isArray(args.subtasks)) {
-          let offsetMs = 1;
-          for (const subTitle of args.subtasks) {
-            const cleanSub = String(subTitle || '').trim();
-            if (!cleanSub) continue;
-            const subTask = { id: newId + (offsetMs++), text: cleanSub, done: false, pri: 'mid', cats, cat: cats[0] || '', project: projId, parentId: newId };
-            tasks.push(subTask);
-            await dbPut(subTask);
-            createdSubs.push(cleanSub);
-          }
-        }
-        markDirty();
-        output = { badgeLabel: `✓ Tarea creada: "${title.slice(0, 34)}"`, data: { success: true, createdTask: { id: newId, title, pri, due, dueTime, subtasksCreated: createdSubs.length } } };
-      }
-
-    } else if (toolName === 'update_task_status') {
-      const t = tasks.find(x => String(x.id) === String(args.taskId));
-      if (!t) {
-        output = { badgeLabel: `⚠️ Tarea #${args.taskId} no encontrada`, data: { error: `No existe tarea con ID ${args.taskId}` } };
-      } else {
-        if (typeof args.title === 'string' && args.title.trim()) t.text = args.title.trim();
-        if (typeof args.desc === 'string') t.desc = args.desc.trim();
-        if (['high', 'mid', 'low'].includes(args.pri)) t.pri = args.pri;
-        if (typeof args.due === 'string') { t.due = args.due.trim(); if (!t.origDue) t.origDue = t.due; }
-        if (typeof args.dueTime === 'string') t.dueTime = args.dueTime.trim();
-        if (typeof args.done === 'boolean' && args.done !== !!t.done) {
-          t.done = args.done;
-          t.doneAt = args.done ? todayISO() : null;
-          if (args.done) {
-            await dbAddHistory({ id: Date.now() + Math.floor(Math.random() * 999), type: 'completed', taskId: t.id, taskText: t.text, taskPri: t.pri || 'mid', cats: getTaskCats(t), ts: new Date().toISOString() });
-          }
-        }
-        await dbPut(t);
-        markDirty();
-        output = { badgeLabel: `✓ Tarea actualizada: "${t.text.slice(0, 32)}"`, data: { success: true, updatedTask: { id: t.id, title: t.text, done: !!t.done, due: t.due, pri: t.pri } } };
-      }
-    } else {
-      output = { badgeLabel: `⚠️ Habilidad desconocida: ${toolName}`, data: { error: `La herramienta "${toolName}" no existe.` } };
+async function executeTaskWriteTool(toolName, args = {}) {
+  if (toolName === 'create_task') {
+    const title = String(args.title || '').trim();
+    if (!title) return { badgeLabel: '⚠️ Falta título', data: { error: 'El campo title es obligatorio' } };
+    const pri = ['high', 'mid', 'low'].includes(args.pri) ? args.pri : 'mid';
+    const due = args.due ? String(args.due).trim() : todayISO();
+    const dueTime = args.dueTime ? String(args.dueTime).trim() : '';
+    const desc = args.desc ? String(args.desc).trim() : '';
+    const cats = args.cat && CATS[args.cat] ? [args.cat] : [];
+    let projId = '';
+    if (args.project) {
+      const foundProj = PROJECTS.find(p => String(p.id) === String(args.project) || p.name.toLowerCase() === String(args.project).toLowerCase());
+      if (foundProj) projId = String(foundProj.id);
     }
-  } catch (err) {
-    output = { badgeLabel: `⚠️ Error en ${toolName}`, data: { error: err.message || 'Error interno en IndexedDB' } };
+    const newId = Date.now();
+    const newTask = { id: newId, text: title, desc, cats, cat: cats[0] || '', pri, project: projId, due, origDue: due, dueTime, repeat: '', done: false };
+    tasks.unshift(newTask);
+    await dbPut(newTask);
+    await dbAddHistory({ id: Date.now() + Math.floor(Math.random() * 999), type: 'created', taskId: newId, taskText: title, taskPri: pri, cats, ts: new Date().toISOString() });
+
+    const createdSubs = [];
+    if (Array.isArray(args.subtasks)) {
+      let offsetMs = 1;
+      for (const subTitle of args.subtasks) {
+        const cleanSub = String(subTitle || '').trim();
+        if (!cleanSub) continue;
+        const subTask = { id: newId + (offsetMs++), text: cleanSub, done: false, pri: 'mid', cats, cat: cats[0] || '', project: projId, parentId: newId };
+        tasks.push(subTask);
+        await dbPut(subTask);
+        createdSubs.push(cleanSub);
+      }
+    }
+    markDirty();
+    return { badgeLabel: `✓ Tarea creada: "${title.slice(0, 34)}"`, data: { success: true, createdTask: { id: newId, title, pri, due, dueTime, subtasksCreated: createdSubs.length } } };
   }
 
-  if (cacheKey && output) _aiToolQueryCache.set(cacheKey, output);
-  return output;
+  if (toolName === 'update_task_status') {
+    const t = tasks.find(x => String(x.id) === String(args.taskId));
+    if (!t) return { badgeLabel: `⚠️ Tarea #${args.taskId} no encontrada`, data: { error: `No existe tarea con ID ${args.taskId}` } };
+    if (typeof args.title === 'string' && args.title.trim()) t.text = args.title.trim();
+    if (typeof args.desc === 'string') t.desc = args.desc.trim();
+    if (['high', 'mid', 'low'].includes(args.pri)) t.pri = args.pri;
+    if (typeof args.due === 'string') { t.due = args.due.trim(); if (!t.origDue) t.origDue = t.due; }
+    if (typeof args.dueTime === 'string') t.dueTime = args.dueTime.trim();
+    if (typeof args.done === 'boolean' && args.done !== !!t.done) {
+      t.done = args.done;
+      t.doneAt = args.done ? todayISO() : null;
+      if (args.done) {
+        await dbAddHistory({ id: Date.now() + Math.floor(Math.random() * 999), type: 'completed', taskId: t.id, taskText: t.text, taskPri: t.pri || 'mid', cats: getTaskCats(t), ts: new Date().toISOString() });
+      }
+    }
+    await dbPut(t);
+    markDirty();
+    return { badgeLabel: `✓ Tarea actualizada: "${t.text.slice(0, 32)}"`, data: { success: true, updatedTask: { id: t.id, title: t.text, done: !!t.done, due: t.due, pri: t.pri } } };
+  }
+
+  return { badgeLabel: `⚠️ Habilidad desconocida: ${toolName}`, data: { error: `Herramienta de escritura no soportada: ${toolName}` } };
 }
 
-function parseToolCallFromResponse(text) {
-  if (!text) return null;
-  const match = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i);
-  if (!match) return null;
-  try {
-    let rawJson = match[1].trim();
-    if (rawJson.startsWith('```')) rawJson = rawJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(rawJson);
-    if (parsed && typeof parsed.tool === 'string') return { tool: parsed.tool, args: parsed.args || {} };
-  } catch (e) {}
-  return null;
+async function executeAITool(toolName, rawArgs = {}) {
+  if (window.WorkspaceTools) {
+    return await window.WorkspaceTools.executeTool(toolName, rawArgs, _aiContextRevision);
+  }
+  return { badgeLabel: '⚠️ WorkspaceTools no cargado', data: { error: 'WorkspaceTools no está disponible.' } };
+}
+
+function parseAllToolCallsFromResponse(text) {
+  if (!text) return [];
+  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+  const calls = [];
+  let match;
+  while ((match = regex.exec(text)) !== null && calls.length < 4) {
+    try {
+      let rawJson = match[1].trim();
+      if (rawJson.startsWith('```')) rawJson = rawJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      const parsed = JSON.parse(rawJson);
+      if (parsed && typeof parsed.tool === 'string') {
+        calls.push({ tool: parsed.tool, args: parsed.args || {} });
+      }
+    } catch (e) {}
+  }
+  return calls;
 }
 
 async function runAIChatTurnWithTools(chat, onToolActivity) {
@@ -863,41 +848,110 @@ async function runAIChatTurnWithTools(chat, onToolActivity) {
 
   const workingMessages = buildSlidingChatHistory(chat.messages);
   const executedTools = [];
+  const seenSignatures = new Set();
   let lastProviderInfo = null;
+  let turnUsage = { promptTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, completionTokens: 0, totalTokens: 0, cacheHitRatio: 0, cacheMode: 'implicit', costUsd: 0, savedUsd: 0, costSource: '' };
 
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < 5; round++) {
     const res = await callAIChatProvider(workingMessages, systemPrompt);
     lastProviderInfo = { provider: res.provider, model: res.model };
-
-    const toolCall = parseToolCallFromResponse(res.text);
-    if (!toolCall) {
-      return { replyText: res.text || 'Sin respuesta del modelo.', executedTools, provider: res.provider, model: res.model };
+    if (res.usage) {
+      turnUsage = mergeUsageTotals(turnUsage, res.usage);
     }
-    if (typeof onToolActivity === 'function') onToolActivity(`Consultando habilidad: ${toolCall.tool}...`);
-    const toolResult = await executeAITool(toolCall.tool, toolCall.args);
-    executedTools.push({ tool: toolCall.tool, badge: toolResult.badgeLabel });
-    if (typeof onToolActivity === 'function') onToolActivity(toolResult.badgeLabel);
 
-    workingMessages.push({ role: 'assistant', content: `<tool_call>${JSON.stringify({ tool: toolCall.tool, args: toolCall.args })}</tool_call>` });
-    workingMessages.push({ role: 'user', content: `[RESULTADO_HERRAMIENTA "${toolCall.tool}"]:\n${JSON.stringify(toolResult.data)}\n\nProporciona la respuesta final en Markdown.` });
+    const toolCalls = parseAllToolCallsFromResponse(res.text);
+    if (res.usage) {
+      recordTokenAuditEntry({
+        kind: toolCalls.length > 0 ? 'tool_round' : 'chat',
+        chatId: chat.id,
+        chatTitle: chat.title,
+        provider: res.provider,
+        model: res.model,
+        usage: res.usage,
+        durationMs: res.durationMs
+      });
+    }
+    if (toolCalls.length === 0) {
+      return { replyText: res.text || 'Sin respuesta del modelo.', executedTools, provider: res.provider, model: res.model, usage: turnUsage };
+    }
+
+    if (typeof onToolActivity === 'function') {
+      onToolActivity(`Consultando ${toolCalls.length === 1 ? toolCalls[0].tool : `${toolCalls.length} habilidades`}...`);
+    }
+
+    const roundResults = await Promise.all(toolCalls.map(async (tc) => {
+      const sig = `${tc.tool}:${JSON.stringify(tc.args || {})}`;
+      if (seenSignatures.has(sig)) {
+        return {
+          tc,
+          result: {
+            badgeLabel: `🔁 Consulta repetida bloqueada (${tc.tool})`,
+            data: { warning: 'Consulta repetida: ya tienes este resultado en el historial, responde al usuario con la información obtenida.' }
+          }
+        };
+      }
+      seenSignatures.add(sig);
+      const result = await executeAITool(tc.tool, tc.args);
+      return { tc, result };
+    }));
+
+    for (const { tc, result } of roundResults) {
+      executedTools.push({ tool: tc.tool, badge: result.badgeLabel });
+    }
+    if (typeof onToolActivity === 'function') {
+      onToolActivity(roundResults[roundResults.length - 1].result.badgeLabel);
+    }
+
+    workingMessages.push({
+      role: 'assistant',
+      content: toolCalls.map(tc => `<tool_call>${JSON.stringify({ tool: tc.tool, args: tc.args })}</tool_call>`).join('\n')
+    });
+    workingMessages.push({
+      role: 'user',
+      content: roundResults.map(({ tc, result }) => `[RESULTADO_HERRAMIENTA "${tc.tool}"]:\n${JSON.stringify(result.data)}`).join('\n\n') + '\n\nProporciona la respuesta final en Markdown.'
+    });
   }
 
   const finalRes = await callAIChatProvider(workingMessages, systemPrompt);
+  if (finalRes.usage) {
+    turnUsage = mergeUsageTotals(turnUsage, finalRes.usage);
+    recordTokenAuditEntry({
+      kind: 'chat',
+      chatId: chat.id,
+      chatTitle: chat.title,
+      provider: finalRes.provider || lastProviderInfo?.provider,
+      model: finalRes.model || lastProviderInfo?.model,
+      usage: finalRes.usage,
+      durationMs: finalRes.durationMs
+    });
+  }
   return {
     replyText: finalRes.text.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim() || 'Consulta completada.',
     executedTools,
     provider: finalRes.provider || lastProviderInfo?.provider,
-    model: finalRes.model || lastProviderInfo?.model
+    model: finalRes.model || lastProviderInfo?.model,
+    usage: turnUsage
   };
 }
 
-async function generateShortChatTitle(userFirstMessage, assistantFirstReply) {
+async function generateShortChatTitle(userFirstMessage, assistantFirstReply, chatRef = null) {
   const statusEl = document.getElementById('aichat-title-gen-status');
   if (statusEl) statusEl.classList.remove('hidden');
   try {
     const titleSystem = 'Devuelve ÚNICAMENTE un título corto en español de 3 a 6 palabras que resuma la conversación. Sin comillas ni punto final.';
     const titlePrompt = `Usuario: "${String(userFirstMessage).slice(0, 350)}"\nAsistente: "${String(assistantFirstReply).slice(0, 350)}"\n\nTítulo corto:`;
     const res = await callAIChatProvider([{ role: 'user', content: titlePrompt }], titleSystem, { maxTokens: 35 });
+    if (res.usage) {
+      recordTokenAuditEntry({
+        kind: 'title',
+        chatId: chatRef?.id || null,
+        chatTitle: chatRef?.title || 'Generación de título',
+        provider: res.provider,
+        model: res.model,
+        usage: res.usage,
+        durationMs: res.durationMs
+      });
+    }
     let cleanTitle = (res.text || '').replace(/^["'«“]+|["'»”]+$/g, '').replace(/^(t[íi]tulo|tema|asunto)\s*:\s*/i, '').replace(/[.]+$/, '').replace(/\n+/g, ' ').trim();
     if (cleanTitle.length > 60) cleanTitle = cleanTitle.slice(0, 57).trim() + '...';
     return cleanTitle || null;
@@ -924,16 +978,6 @@ const AICHAT_FOLDER_COLORS = [
 ];
 let _selectedChatFolderEmoji = AICHAT_FOLDER_EMOJIS[0];
 let _selectedChatFolderColor = AICHAT_FOLDER_COLORS[0].hex;
-
-const AI_CHAT_TOOLS_CATALOG = [
-  { name: 'search_tasks', title: 'Búsqueda Avanzada de Tareas', icon: '🔍', mode: 'read', modeLabel: 'Lectura · Caché L3', desc: 'Explora todas tus tareas filtrando por texto, estado, prioridad, categoría o proyecto.', params: 'query, status, priority, category, projectId, limit', samplePrompt: 'Usa search_tasks para buscar mis tareas de prioridad alta pendientes y dime cuáles tienen más urgencia.' },
-  { name: 'get_task_details', title: 'Inspección Profunda de Tarea', icon: '📄', mode: 'read', modeLabel: 'Lectura · Caché L3', desc: 'Recupera notas Markdown, subtareas, recurrencia e historial de fechas pospuestas.', params: 'taskId', samplePrompt: 'Inspecciona en detalle mi tarea pendiente más importante usando get_task_details.' },
-  { name: 'get_project_tasks', title: 'Auditoría de Proyecto', icon: '◫', mode: 'read', modeLabel: 'Lectura · Caché L3', desc: 'Analiza tareas de un proyecto, su avance, pendientes críticos y completadas.', params: 'projectId o projectName', samplePrompt: 'Revisa mis proyectos actuales con get_project_tasks y dame un reporte de avance.' },
-  { name: 'get_activity_history', title: 'Bitácora de Actividad', icon: '🕓', mode: 'read', modeLabel: 'Lectura · Caché L3', desc: 'Consulta eventos cronológicos en TareasDB en una ventana de días.', params: 'days, type, limit', samplePrompt: 'Consulta mi bitácora de los últimos 7 días con get_activity_history y resume mis avances.' },
-  { name: 'get_productivity_metrics', title: 'Métricas de Productividad', icon: '📊', mode: 'read', modeLabel: 'Lectura · Caché L3', desc: 'Calcula Win Rate, Cycle Time, racha semanal y balance Maker vs Manager.', params: 'monthOffset', samplePrompt: 'Ejecuta get_productivity_metrics para analizar mi rendimiento y balance Maker vs Manager.' },
-  { name: 'create_task', title: 'Creación Directa de Tarea', icon: '✨', mode: 'write', modeLabel: 'Escritura en TareasDB', desc: 'Crea una nueva tarea (y subtareas) directamente en tu planeador.', params: 'title, desc, pri, due, dueTime, cat, project, subtasks', samplePrompt: 'Crea una tarea de prioridad media para hoy llamada "Revisar planificación semanal" usando create_task.' },
-  { name: 'update_task_status', title: 'Actualizar Tarea', icon: '⚡', mode: 'write', modeLabel: 'Escritura en TareasDB', desc: 'Marca como completada/pendiente, reprograma fecha o ajusta prioridad.', params: 'taskId, done, due, pri, title', samplePrompt: 'Revisa mis tareas vencidas y pregúntame cuáles quiero reprogramar usando update_task_status.' }
-];
 
 function getAIChatFolderById(folderId) {
   if (!folderId) return null;
@@ -974,11 +1018,13 @@ function updateAIChatTotalBadge() {
 }
 
 function switchAIChatTab(tabName) {
-  activeAIChatTab = tabName === 'chats' ? 'chats' : 'home';
+  activeAIChatTab = (tabName === 'chats' || tabName === 'audit') ? tabName : 'home';
   const viewHome = document.getElementById('aichat-view-home');
   const viewChats = document.getElementById('aichat-view-chats');
+  const viewAudit = document.getElementById('aichat-view-audit');
   const tabHome = document.getElementById('aichat-tab-home');
   const tabChats = document.getElementById('aichat-tab-chats');
+  const tabAudit = document.getElementById('aichat-tab-audit');
   if (viewHome) {
     viewHome.classList.toggle('active', activeAIChatTab === 'home');
     viewHome.classList.toggle('hidden', activeAIChatTab !== 'home');
@@ -987,14 +1033,264 @@ function switchAIChatTab(tabName) {
     viewChats.classList.toggle('active', activeAIChatTab === 'chats');
     viewChats.classList.toggle('hidden', activeAIChatTab !== 'chats');
   }
+  if (viewAudit) {
+    viewAudit.classList.toggle('active', activeAIChatTab === 'audit');
+    viewAudit.classList.toggle('hidden', activeAIChatTab !== 'audit');
+  }
   if (tabHome) tabHome.classList.toggle('active', activeAIChatTab === 'home');
   if (tabChats) tabChats.classList.toggle('active', activeAIChatTab === 'chats');
+  if (tabAudit) tabAudit.classList.toggle('active', activeAIChatTab === 'audit');
   if (activeAIChatTab === 'chats') {
     renderAIChatFoldersBar();
     renderAIChatsList();
+  } else if (activeAIChatTab === 'audit') {
+    renderAIAuditView();
   } else {
     renderActiveAIChatView();
   }
+}
+
+function formatCompactNumber(num) {
+  return new Intl.NumberFormat('es-MX').format(Number(num) || 0);
+}
+
+function formatUsd(val) {
+  const n = Number(val) || 0;
+  if (n <= 0) return '$0.00';
+  if (n < 0.01) return '$' + n.toFixed(4);
+  if (n < 1) return '$' + n.toFixed(3);
+  return '$' + n.toFixed(2);
+}
+
+function formatDurationMs(ms) {
+  const n = Number(ms) || 0;
+  if (n <= 0) return '—';
+  if (n < 1000) return `${Math.round(n)} ms`;
+  return `${(n / 1000).toFixed(1)} s`;
+}
+
+function renderAIAuditView() {
+  const scopeEl = document.getElementById('aichat-audit-scope');
+  const periodEl = document.getElementById('aichat-audit-period');
+  const scope = scopeEl ? scopeEl.value : 'all';
+  const period = periodEl ? periodEl.value : 'all';
+
+  const scopedEntries = (scope === 'current' && currentAIChatId)
+    ? aiTokenAuditLog.filter(e => String(e.chatId) === String(currentAIChatId))
+    : aiTokenAuditLog;
+
+  const now = new Date();
+  const startOfTodayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const sevenDaysAgoMs = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgoMs = Date.now() - (30 * 24 * 60 * 60 * 1000);
+
+  let todayCost = 0;
+  let sevenDayCost = 0;
+  for (const e of scopedEntries) {
+    const ts = Number(e.ts) || 0;
+    const c = Number(e.costUsd) || 0;
+    if (ts >= startOfTodayMs) todayCost += c;
+    if (ts >= sevenDaysAgoMs) sevenDayCost += c;
+  }
+
+  const entries = scopedEntries.filter(e => {
+    const ts = Number(e.ts) || 0;
+    if (period === 'today') return ts >= startOfTodayMs;
+    if (period === '7d') return ts >= sevenDaysAgoMs;
+    if (period === '30d') return ts >= thirtyDaysAgoMs;
+    return true;
+  });
+
+  let promptSum = 0;
+  let cachedSum = 0;
+  let completionSum = 0;
+  let totalSum = 0;
+  let costSum = 0;
+  let savedSum = 0;
+  let latencySum = 0;
+  let latencyCount = 0;
+  const sourcesSet = new Set();
+  const kindCounts = { chat: 0, tool_round: 0, title: 0 };
+  const byModelMap = new Map();
+
+  for (const e of entries) {
+    const p = Number(e.promptTokens) || 0;
+    const c = Number(e.cachedTokens) || 0;
+    const out = Number(e.completionTokens) || 0;
+    const tot = Number(e.totalTokens) || 0;
+    const cost = Number(e.costUsd) || 0;
+    const saved = Number(e.savedUsd) || 0;
+    const dur = Number(e.durationMs) || 0;
+
+    promptSum += p;
+    cachedSum += c;
+    completionSum += out;
+    totalSum += tot;
+    costSum += cost;
+    savedSum += saved;
+    if (dur > 0) {
+      latencySum += dur;
+      latencyCount++;
+    }
+    if (e.costSource && e.costSource !== 'unknown') {
+      sourcesSet.add(e.costSource);
+    }
+    if (kindCounts[e.kind] !== undefined) {
+      kindCounts[e.kind]++;
+    }
+
+    const mKey = `${e.provider || 'unknown'}::${e.model || 'modelo'}`;
+    const prev = byModelMap.get(mKey) || {
+      provider: e.provider || 'unknown',
+      model: e.model || 'modelo',
+      calls: 0,
+      prompt: 0,
+      cached: 0,
+      total: 0,
+      costUsd: 0,
+      hasEstimated: false
+    };
+    prev.calls += 1;
+    prev.prompt += p;
+    prev.cached += c;
+    prev.total += tot;
+    prev.costUsd += cost;
+    if (e.costSource === 'estimated') prev.hasEstimated = true;
+    byModelMap.set(mKey, prev);
+  }
+
+  const ratioPct = promptSum > 0 ? Math.min(100, Math.round((cachedSum / promptSum) * 100)) : 0;
+  const avgCost = entries.length > 0 ? costSum / entries.length : 0;
+  const avgTokens = entries.length > 0 ? Math.round(totalSum / entries.length) : 0;
+  const avgLatency = latencyCount > 0 ? latencySum / latencyCount : 0;
+
+  let sourceLabel = 'Sin tarifa';
+  if (sourcesSet.size > 1) sourceLabel = 'Mixto';
+  else if (sourcesSet.has('provider')) sourceLabel = 'Real';
+  else if (sourcesSet.has('estimated')) sourceLabel = 'Estimado';
+
+  const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setText('audit-kpi-cost', formatUsd(costSum));
+  setText('audit-kpi-cost-source', sourceLabel);
+  setText('audit-kpi-saved', formatUsd(savedSum));
+  setText('audit-kpi-avg-cost', formatUsd(avgCost));
+  setText('audit-kpi-today-cost', formatUsd(todayCost));
+  setText('audit-kpi-7d-cost', `7d: ${formatUsd(sevenDayCost)}`);
+
+  setText('audit-kpi-prompt', formatCompactNumber(promptSum));
+  setText('audit-kpi-cached', formatCompactNumber(cachedSum));
+  setText('audit-kpi-ratio', `${ratioPct}%`);
+  setText('audit-kpi-completion', formatCompactNumber(completionSum));
+  setText('audit-kpi-total', formatCompactNumber(totalSum));
+  setText('audit-kpi-calls', `${entries.length} ${entries.length === 1 ? 'llamada' : 'llamadas'}`);
+  setText('audit-cache-bar-label', `${ratioPct}% de entrada en caché`);
+  const barFill = document.getElementById('audit-cache-bar-fill');
+  if (barFill) barFill.style.width = `${ratioPct}%`;
+
+  // Uso General
+  const totalChats = aiChats.length;
+  const totalFolders = aiChatFolders.length;
+  const totalMessages = aiChats.reduce((sum, ch) => sum + (Array.isArray(ch.messages) ? ch.messages.length : 0), 0);
+  const avgMsgsPerChat = totalChats > 0 ? (totalMessages / totalChats).toFixed(1) : '0';
+  setText('audit-gen-chats', `${formatCompactNumber(totalChats)} / ${formatCompactNumber(totalFolders)}`);
+  setText('audit-gen-messages', `${formatCompactNumber(totalMessages)} (${avgMsgsPerChat}/chat)`);
+  setText('audit-gen-avg-tokens', formatCompactNumber(avgTokens));
+  setText('audit-gen-avg-latency', formatDurationMs(avgLatency));
+
+  const breakdownEl = document.getElementById('audit-gen-breakdown');
+  if (breakdownEl) {
+    breakdownEl.innerHTML = [
+      `<span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">Respuestas: ${kindCounts.chat}</span>`,
+      `<span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">Herramientas: ${kindCounts.tool_round}</span>`,
+      `<span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">Títulos: ${kindCounts.title}</span>`
+    ].join('');
+  }
+
+  // Consumo por Modelo
+  const modelsEl = document.getElementById('aichat-audit-models');
+  if (modelsEl) {
+    const modelRows = Array.from(byModelMap.values()).sort((a, b) => (b.costUsd - a.costUsd) || (b.total - a.total));
+    if (modelRows.length === 0) {
+      modelsEl.innerHTML = `
+        <div class="col-span-full rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-4 text-center text-xs text-slate-500 dark:text-slate-400">
+          Sin datos por modelo en este filtro.
+        </div>
+      `;
+    } else {
+      modelsEl.innerHTML = modelRows.map(m => {
+        const shortM = String(m.model).split('/').pop() || 'modelo';
+        const mRatio = m.prompt > 0 ? Math.min(100, Math.round((m.cached / m.prompt) * 100)) : 0;
+        const costPrefix = m.hasEstimated && m.costUsd > 0 ? '~' : '';
+        return `
+          <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3 shadow-sm flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">${escHtml(shortM)}</div>
+              <div class="text-[11px] text-slate-500 dark:text-slate-400">${escHtml(m.provider)} · ${m.calls} ${m.calls === 1 ? 'llamada' : 'llamadas'} · Caché ${mRatio}%</div>
+            </div>
+            <div class="text-right shrink-0">
+              <div class="text-xs font-bold text-slate-900 dark:text-slate-100">${costPrefix}${formatUsd(m.costUsd)}</div>
+              <div class="text-[11px] text-slate-500 dark:text-slate-400">${formatCompactNumber(m.total)} tok</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  const listEl = document.getElementById('aichat-audit-list');
+  if (!listEl) return;
+
+  if (entries.length === 0) {
+    listEl.innerHTML = `
+      <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-6 text-center text-xs text-slate-500 dark:text-slate-400">
+        No hay registros de consumo todavía${scope === 'current' ? ' para el chat actual' : ''}. Envía un mensaje al asistente para comenzar la auditoría.
+      </div>
+    `;
+    return;
+  }
+
+  const kindLabels = {
+    chat: 'Respuesta',
+    tool_round: 'Ronda de herramientas',
+    title: 'Título automático'
+  };
+
+  listEl.innerHTML = entries.map(e => {
+    const dt = e.ts ? new Date(e.ts).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    const pct = e.promptTokens > 0 ? Math.min(100, Math.round((e.cachedTokens / e.promptTokens) * 100)) : 0;
+    const modeLabel = e.cacheMode === 'explicit' ? 'Explícita' : 'Implícita';
+    const modeCls = e.cacheMode === 'explicit'
+      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/60'
+      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700';
+    const shortModel = String(e.model || '').split('/').pop() || 'modelo';
+    const costPrefix = e.costSource === 'estimated' && Number(e.costUsd) > 0 ? '~' : '';
+    const costBadge = Number(e.costUsd) > 0
+      ? `<span class="font-bold text-slate-800 dark:text-slate-100">${costPrefix}${formatUsd(e.costUsd)}</span>`
+      : `<span class="text-slate-400">$0.00</span>`;
+    const durBadge = Number(e.durationMs) > 0 ? ` · ${formatDurationMs(e.durationMs)}` : '';
+    return `
+      <div class="rounded-2xl bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 p-3.5 shadow-sm flex flex-col gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold border ${modeCls}">${modeLabel}</span>
+            <span class="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">${escHtml(e.chatTitle || 'Chat')}</span>
+            <span class="text-[11px] text-slate-500 dark:text-slate-400">· ${escHtml(kindLabels[e.kind] || e.kind)}</span>
+          </div>
+          <span class="text-[11px] text-slate-400 dark:text-slate-500">${escHtml(dt)}${escHtml(durBadge)}</span>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300">
+          <span class="font-mono text-[11px] text-slate-500 dark:text-slate-400">${escHtml(e.provider)} · ${escHtml(shortModel)}</span>
+          <div class="flex flex-wrap items-center gap-3 font-medium">
+            <span>Costo: ${costBadge}</span>
+            <span>Entrada: <strong>${formatCompactNumber(e.promptTokens)}</strong></span>
+            <span class="text-emerald-600 dark:text-emerald-400">Caché: <strong>${formatCompactNumber(e.cachedTokens)}</strong> (${pct}%)</span>
+            <span>Salida: <strong>${formatCompactNumber(e.completionTokens)}</strong></span>
+            <span>Total: <strong>${formatCompactNumber(e.totalTokens)}</strong></span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function startNewAIChat() {
@@ -1120,6 +1416,17 @@ function renderAIChatMessages(chat, scrollToBottom = false) {
     const toolsHtml = Array.isArray(m.tools) && m.tools.length
       ? `<div class="aichat-tools-used">${m.tools.map(t => `<span class="aichat-tool-pill">${escHtml(t.badge || t.tool)}</span>`).join('')}</div>` : '';
     const modelBadge = m.model ? `<span class="aichat-msg-model">${escHtml(String(m.model).split('/').pop())}</span>` : '';
+    let cacheChip = '';
+    if (m.usage && Number(m.usage.totalTokens) > 0) {
+      const pct = m.usage.promptTokens > 0 ? Math.round(((Number(m.usage.cachedTokens) || 0) / m.usage.promptTokens) * 100) : 0;
+      const costPart = Number(m.usage.costUsd) > 0
+        ? ` · ${m.usage.costSource === 'estimated' ? '~' : ''}${formatUsd(m.usage.costUsd)}`
+        : '';
+      const chipText = Number(m.usage.cachedTokens) > 0
+        ? `Caché ${pct}% · ${formatCompactNumber(m.usage.totalTokens)} tok${costPart}`
+        : `${formatCompactNumber(m.usage.totalTokens)} tok${costPart}`;
+      cacheChip = `<button type="button" class="aichat-msg-model hover:underline cursor-pointer" data-open-audit="1" title="Ver auditoría de tokens">${escHtml(chipText)}</button>`;
+    }
     return `
       <div class="aichat-msg aichat-msg-assistant">
         <div class="aichat-avatar-assistant" title="Asistente IA">✦</div>
@@ -1127,13 +1434,17 @@ function renderAIChatMessages(chat, scrollToBottom = false) {
           ${toolsHtml}
           <div class="md-content">${typeof renderMd === 'function' ? renderMd(m.content) : escHtml(m.content)}</div>
           <div class="aichat-msg-footer">
-            <div class="aichat-msg-meta">${modelBadge}${timeStr ? `<span>${timeStr}</span>` : ''}</div>
+            <div class="aichat-msg-meta">${modelBadge}${cacheChip}${timeStr ? `<span>${timeStr}</span>` : ''}</div>
             <button type="button" class="aichat-copy-btn" data-copy-idx="${idx}" title="Copiar respuesta">📋 Copiar</button>
           </div>
         </div>
       </div>
     `;
   }).join('');
+
+  listEl.querySelectorAll('[data-open-audit]').forEach(btn => {
+    btn.addEventListener('click', () => switchAIChatTab('audit'));
+  });
 
   listEl.querySelectorAll('[data-copy-idx]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1232,7 +1543,8 @@ async function sendAIChatMessage(prefilledText = null) {
 
     chat.messages.push({
       role: 'assistant', content: turnResult.replyText, ts: Date.now(),
-      provider: turnResult.provider, model: turnResult.model, tools: turnResult.executedTools
+      provider: turnResult.provider, model: turnResult.model, tools: turnResult.executedTools,
+      usage: turnResult.usage || null
     });
     chat.provider = turnResult.provider;
     chat.model = turnResult.model;
@@ -1245,7 +1557,7 @@ async function sendAIChatMessage(prefilledText = null) {
 
     if ((isBrandNewChat || !chat.titleGenerated) && !chat.customTitle && chat.messages.length >= 2) {
       const firstUser = chat.messages.find(m => m.role === 'user')?.content || text;
-      const generatedTitle = await generateShortChatTitle(firstUser, turnResult.replyText);
+      const generatedTitle = await generateShortChatTitle(firstUser, turnResult.replyText, chat);
       const currentRef = aiChats.find(c => String(c.id) === String(chat.id));
       if (currentRef && !currentRef.customTitle && generatedTitle) {
         currentRef.title = generatedTitle;
@@ -1628,16 +1940,19 @@ async function assignChatToFolder(chatId, folderId) {
 function openAIChatToolsModal() {
   const bannerEl = document.getElementById('aichat-tools-cache-banner');
   const gridEl = document.getElementById('aichat-tools-catalog-list');
+  const catalog = window.WorkspaceTools ? window.WorkspaceTools.TOOLS_CATALOG : [];
+  const cacheSize = window.WorkspaceTools ? window.WorkspaceTools.getCacheSize() : _aiToolQueryCache.size;
+
   if (bannerEl) {
     const totalTasksCount = tasks.filter(t => !t.parentId).length;
     bannerEl.innerHTML = `
-      <div class="aichat-tcache-item"><span class="aichat-tcache-dot ${_aiContextCache ? 'ok' : ''}"></span><div><div class="aichat-tcache-label">Extracto Base (TareasDB)</div><div class="aichat-tcache-val">${totalTasksCount} tareas cargadas</div></div></div>
+      <div class="aichat-tcache-item"><span class="aichat-tcache-dot ${_aiContextCache ? 'ok' : ''}"></span><div><div class="aichat-tcache-label">Extracto Multi-Módulo</div><div class="aichat-tcache-val">Tareas (${totalTasksCount}) + Notas + Blog + Chats</div></div></div>
       <div class="aichat-tcache-item"><span class="aichat-tcache-dot ok"></span><div><div class="aichat-tcache-label">Memoria Deslizante</div><div class="aichat-tcache-val">Ventana de ${AI_HISTORY_WINDOW_MAX} mensajes</div></div></div>
-      <div class="aichat-tcache-item"><span class="aichat-tcache-dot ok"></span><div><div class="aichat-tcache-label">Caché de Consultas DB</div><div class="aichat-tcache-val">${_aiToolQueryCache.size} en memoria · máx. 3 rondas</div></div></div>
+      <div class="aichat-tcache-item"><span class="aichat-tcache-dot ok"></span><div><div class="aichat-tcache-label">Caché L3 + Anti-Bucle</div><div class="aichat-tcache-val">${cacheSize} en caché · máx. 5 rondas</div></div></div>
     `;
   }
   if (gridEl) {
-    gridEl.innerHTML = AI_CHAT_TOOLS_CATALOG.map((tool, idx) => `
+    gridEl.innerHTML = catalog.map((tool, idx) => `
       <div class="aichat-tool-spec-card">
         <div class="aichat-tool-spec-top">
           <div class="aichat-tool-spec-id"><span class="aichat-tool-spec-icon">${tool.icon}</span><div><div class="aichat-tool-spec-title">${escHtml(tool.title)}</div><code class="aichat-tool-spec-code">${escHtml(tool.name)}</code></div></div>
@@ -1650,7 +1965,7 @@ function openAIChatToolsModal() {
     `).join('');
     gridEl.querySelectorAll('[data-try-tool-idx]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const spec = AI_CHAT_TOOLS_CATALOG[Number(btn.dataset.tryToolIdx)];
+        const spec = catalog[Number(btn.dataset.tryToolIdx)];
         if (!spec) return;
         closeAIChatToolsModal();
         switchAIChatTab('home');
@@ -1881,10 +2196,51 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadAIChats();
   await loadAIChatFolders();
   await sanitizeAIChatFolderReferences();
+  await loadTokenAuditLog();
 
   // Limpiar claves heredadas si existían
   await dbSetMeta('openRouterKey', null).catch(() => {});
   await dbSetMeta('googleAIKey', null).catch(() => {});
+
+  // Registrar adaptadores de WorkspaceTools
+  if (window.WorkspaceTools) {
+    window.WorkspaceTools.setDataAdapters({
+      getTareasContext: () => ({
+        tasks,
+        CATS,
+        PROJECTS,
+        aiChats,
+        aiChatFolders,
+        dbGetHistory,
+        dbGetMeta,
+        helpers: {
+          todayISO,
+          isTaskOverdue,
+          isTaskScheduledForDate,
+          getTaskCats,
+          getSubtasks,
+          getProjectById,
+          formatRepeat,
+          calcWinRate,
+          calcCycleTime,
+          calcWeekStreak,
+          calcImpactFactor
+        }
+      }),
+      executeWriteTool: executeTaskWriteTool
+    });
+
+    window.addEventListener('focus', () => {
+      window.WorkspaceTools.invalidateCache();
+      _aiContextCache = null;
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        window.WorkspaceTools.invalidateCache();
+        _aiContextCache = null;
+      }
+    });
+  }
 
   // Sincronización continua compartida con Tareas (cloudAutoSync)
   const savedAutoSync = await dbGetMeta('cloudAutoSync').catch(() => false);
@@ -1993,6 +2349,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   document.getElementById('aichat-send-btn')?.addEventListener('click', () => sendAIChatMessage());
   document.querySelectorAll('.aichat-bnav-tab[data-aichat-tab]').forEach(tab => tab.addEventListener('click', () => switchAIChatTab(tab.dataset.aichatTab)));
+  document.getElementById('aichat-audit-period')?.addEventListener('change', renderAIAuditView);
+  document.getElementById('aichat-audit-scope')?.addEventListener('change', renderAIAuditView);
+  document.getElementById('aichat-audit-clear-btn')?.addEventListener('click', clearTokenAuditLog);
 
   const searchIn = document.getElementById('aichat-search-input');
   const searchClear = document.getElementById('aichat-search-clear');

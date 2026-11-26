@@ -59,14 +59,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
     <link rel="stylesheet" href="ia/css/estilos.css">
 </head>
-<body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 min-h-screen flex flex-col transition-colors duration-300">
+<body class="bg-google-grayBg dark:bg-[#111318] text-slate-800 dark:text-slate-200 h-[100dvh] overflow-hidden flex flex-col transition-colors duration-300">
 
     <!-- Header -->
-    <header class="sticky top-0 z-30 w-full bg-white/85 dark:bg-[#202124]/85 backdrop-blur-md border-b border-slate-200/70 dark:border-slate-800/80 px-4 py-3 md:px-6">
+    <header class="shrink-0 w-full bg-white/85 dark:bg-[#202124]/85 backdrop-blur-md border-b border-slate-200/70 dark:border-slate-800/80 px-3 py-2.5 md:px-6 md:py-3">
         <div class="max-w-6xl mx-auto flex items-center justify-between gap-2 md:gap-4">
             <!-- Izquierda: Volver al Panel de Acceso -->
             <div class="flex items-center gap-2 shrink-0">
-                <a href="index.html" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs md:text-sm font-semibold transition-colors" title="Volver al Panel de Acceso">
+                <a href="index.html" class="inline-flex items-center gap-1.5 px-2.5 py-2 md:px-3 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs md:text-sm font-semibold transition-colors" title="Volver al Panel de Acceso">
                     <span class="material-symbols-outlined text-[18px]">arrow_back</span>
                     <span class="hidden sm:inline">Inicio</span>
                 </a>
@@ -74,32 +74,32 @@
 
             <!-- Centro: Título, carpeta activa y modelo -->
             <div class="min-w-0 flex-1 flex flex-col items-center text-center">
-                <div class="flex items-center justify-center gap-1.5 max-w-full">
-                    <h1 id="aichat-header-title" class="text-sm md:text-base font-bold text-slate-800 dark:text-slate-100 truncate max-w-[180px] sm:max-w-[320px] md:max-w-[420px]">Asistente IA</h1>
-                    <button type="button" id="aichat-rename-active-btn" class="hidden p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors" title="Renombrar conversación">
-                        <span class="material-symbols-outlined text-[16px]">edit</span>
+                <div class="flex items-center justify-center gap-1 max-w-full min-w-0">
+                    <h1 id="aichat-header-title" class="text-sm md:text-base font-bold text-slate-800 dark:text-slate-100 truncate">Asistente IA</h1>
+                    <button type="button" id="aichat-rename-active-btn" class="hidden shrink-0 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors" title="Renombrar conversación">
+                        <span class="material-symbols-outlined text-[15px]">edit</span>
                     </button>
-                    <button type="button" id="aichat-active-folder-btn" class="hidden inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-google-blue/60 transition-colors max-w-[140px] truncate" title="Asignar o cambiar carpeta">
+                    <button type="button" id="aichat-active-folder-btn" class="hidden shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-google-blue/60 transition-colors max-w-[110px] sm:max-w-[150px]" title="Asignar o cambiar carpeta">
                         <span id="aichat-active-folder-icon">📁</span>
                         <span id="aichat-active-folder-label" class="truncate">Sin carpeta</span>
                     </button>
                 </div>
-                <button type="button" id="aichat-model-pill" class="mt-0.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="Configurar proveedor y modelo de IA">
-                    <span class="aichat-model-dot" id="aichat-model-dot"></span>
-                    <span id="aichat-model-label">Cargando modelo...</span>
+                <button type="button" id="aichat-model-pill" class="mt-0.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors max-w-full" title="Configurar proveedor y modelo de IA">
+                    <span class="aichat-model-dot shrink-0" id="aichat-model-dot"></span>
+                    <span id="aichat-model-label" class="truncate">Cargando modelo...</span>
                 </button>
             </div>
 
             <!-- Derecha: Habilidades, Ajustes IA, Nuevo chat y Tema -->
-            <div class="flex items-center gap-1.5 md:gap-2 shrink-0">
-                <button type="button" id="aichat-open-tools-btn" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors" title="Ver las 7 herramientas de base de datos">
+            <div class="flex items-center gap-1 md:gap-2 shrink-0">
+                <button type="button" id="aichat-open-tools-btn" class="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors" title="Ver las 7 herramientas de base de datos">
                     <span class="material-symbols-outlined text-[18px] text-google-blue dark:text-google-blueDark">build</span>
                     <span class="hidden lg:inline">7 Habilidades</span>
                 </button>
                 <button type="button" id="aichat-open-settings-btn" class="p-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors flex items-center justify-center" title="Ajustes de IA y Sesión">
                     <span class="material-symbols-outlined text-[19px]">tune</span>
                 </button>
-                <button type="button" id="aichat-new-chat-btn" class="inline-flex items-center gap-1 px-3.5 py-2 rounded-full bg-google-blue hover:bg-blue-700 dark:bg-google-blueDark dark:hover:bg-blue-300 text-white dark:text-[#0c1b32] text-xs md:text-sm font-semibold shadow-sm transition-colors" title="Iniciar nueva conversación">
+                <button type="button" id="aichat-new-chat-btn" class="inline-flex items-center gap-1 p-2 sm:px-3.5 sm:py-2 rounded-full bg-google-blue hover:bg-blue-700 dark:bg-google-blueDark dark:hover:bg-blue-300 text-white dark:text-[#0c1b32] text-xs md:text-sm font-semibold shadow-sm transition-colors" title="Iniciar nueva conversación">
                     <span class="material-symbols-outlined text-[18px]">add</span>
                     <span class="hidden sm:inline">Nuevo chat</span>
                 </button>
@@ -111,23 +111,23 @@
     </header>
 
     <!-- Main Content -->
-    <main class="flex-1 flex flex-col max-w-5xl w-full mx-auto px-4 md:px-6 pt-4 pb-24">
+    <main class="flex-1 min-h-0 flex flex-col overflow-hidden max-w-5xl w-full mx-auto px-3 sm:px-4 md:px-6">
 
         <!-- VISTA 1: Inicio / Chat Activo -->
-        <section class="aichat-view active flex-1 flex flex-col" id="aichat-view-home">
+        <section class="aichat-view active flex-1 min-h-0 flex flex-col overflow-hidden" id="aichat-view-home">
 
             <!-- Pantalla de Bienvenida -->
-            <div id="aichat-welcome" class="flex-1 flex items-center justify-center py-4 md:py-8">
-                <div class="w-full max-w-3xl text-center">
+            <div id="aichat-welcome" class="flex-1 min-h-0 overflow-y-auto py-4 md:py-6 flex flex-col">
+                <div class="w-full max-w-3xl mx-auto my-auto text-center">
                     <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-blue-600 via-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/20">
                         <span class="material-symbols-outlined text-3xl">auto_awesome</span>
                     </div>
-                    <h2 id="aichat-greeting" class="text-2xl md:text-3xl font-bold tracking-tight text-slate-800 dark:text-slate-100 mb-2">¿En qué nos enfocamos hoy?</h2>
-                    <p class="text-sm md:text-base text-slate-500 dark:text-slate-400 max-w-xl mx-auto mb-5">
+                    <h2 id="aichat-greeting" class="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-slate-800 dark:text-slate-100 mb-2">¿En qué nos enfocamos hoy?</h2>
+                    <p class="text-xs sm:text-sm md:text-base text-slate-500 dark:text-slate-400 max-w-xl mx-auto mb-4">
                         Tu asistente inteligente conectado en tiempo real a la base de datos de tus <strong>Tareas</strong>, proyectos, métricas e historial.
                     </p>
 
-                    <div class="flex flex-wrap items-center justify-center gap-2 mb-7">
+                    <div class="flex flex-wrap items-center justify-center gap-2 mb-5">
                         <div id="aichat-context-summary-pill" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white dark:bg-[#202124] border border-slate-200/80 dark:border-slate-700/80 text-xs font-medium text-slate-600 dark:text-slate-300 shadow-sm">
                             <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
                             <span id="aichat-context-pill-text">Contexto sincronizado · 7 habilidades listas</span>
@@ -138,8 +138,8 @@
                         </button>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-left" id="aichat-starters-grid">
-                        <button type="button" class="aichat-starter-card group bg-white dark:bg-[#202124] rounded-2xl p-4 md:p-5 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Analiza mis tareas pendientes y vencidas de hoy, dime por cuál empezar y propón un plan de ataque realista.">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left" id="aichat-starters-grid">
+                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Analiza mis tareas pendientes y vencidas de hoy, dime por cuál empezar y propón un plan de ataque realista.">
                             <div class="flex items-center justify-between mb-2">
                                 <span class="material-symbols-outlined text-amber-500 text-xl">bolt</span>
                                 <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300">Priorización</span>
@@ -148,7 +148,7 @@
                             <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Ordena mis pendientes actuales según urgencia, impacto y vencimiento.</div>
                         </button>
 
-                        <button type="button" class="aichat-starter-card group bg-white dark:bg-[#202124] rounded-2xl p-4 md:p-5 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Revisa las tareas que más he pospuesto o que llevan más tiempo estancadas en mi base de datos y ayúdame a destrabarlas o dividirlas.">
+                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Revisa las tareas que más he pospuesto o que llevan más tiempo estancadas en mi base de datos y ayúdame a destrabarlas o dividirlas.">
                             <div class="flex items-center justify-between mb-2">
                                 <span class="material-symbols-outlined text-emerald-500 text-xl">lock_open</span>
                                 <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300">Antiprocrastinación</span>
@@ -157,7 +157,7 @@
                             <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Detecta cuellos de botella crónicos y divídelos en pasos simples.</div>
                         </button>
 
-                        <button type="button" class="aichat-starter-card group bg-white dark:bg-[#202124] rounded-2xl p-4 md:p-5 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Consulta mis proyectos activos y mis métricas de rendimiento para darme un diagnóstico de avance y balance Maker vs Manager.">
+                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Consulta mis proyectos activos y mis métricas de rendimiento para darme un diagnóstico de avance y balance Maker vs Manager.">
                             <div class="flex items-center justify-between mb-2">
                                 <span class="material-symbols-outlined text-blue-500 text-xl">analytics</span>
                                 <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">Proyectos y Métricas</span>
@@ -166,7 +166,7 @@
                             <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Evalúa la carga de mis proyectos y mi porcentaje de trabajo profundo.</div>
                         </button>
 
-                        <button type="button" class="aichat-starter-card group bg-white dark:bg-[#202124] rounded-2xl p-4 md:p-5 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Ayúdame a planificar un nuevo objetivo y estructurarlo en tareas accionables dentro de mi planeador.">
+                        <button type="button" class="aichat-starter-card text-left w-full group bg-white dark:bg-[#202124] rounded-2xl p-4 border border-slate-200/70 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-google-blue/50 dark:hover:border-google-blueDark/50 transition-all" data-starter="Ayúdame a planificar un nuevo objetivo y estructurarlo en tareas accionables dentro de mi planeador.">
                             <div class="flex items-center justify-between mb-2">
                                 <span class="material-symbols-outlined text-violet-500 text-xl">auto_fix_high</span>
                                 <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300">Acción Directa</span>
@@ -179,12 +179,12 @@
             </div>
 
             <!-- Hilo de Mensajes -->
-            <div id="aichat-thread-wrap" class="hidden flex-1 overflow-y-auto py-3 space-y-4">
-                <div id="aichat-messages-list" class="space-y-4 pb-4"></div>
+            <div id="aichat-thread-wrap" class="hidden flex-1 min-h-0 overflow-y-auto py-3 pr-1">
+                <div id="aichat-messages-list" class="space-y-4 pb-2"></div>
             </div>
 
             <!-- Composer -->
-            <div class="sticky bottom-16 z-20 pt-2">
+            <div class="shrink-0 pt-2 pb-2">
                 <div class="flex items-center justify-between px-2 mb-1.5 text-[11px] text-slate-500 dark:text-slate-400">
                     <button type="button" id="aichat-composer-tools-btn" class="inline-flex items-center gap-1 hover:text-google-blue dark:hover:text-google-blueDark transition-colors">
                         <span>Memoria + Extracto en Caché ·</span>
@@ -196,11 +196,11 @@
                     </span>
                 </div>
 
-                <div class="bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/90 dark:border-slate-700/80 shadow-lg px-4 py-2.5 flex items-end gap-2.5 focus-within:ring-2 focus-within:ring-google-blue/40 dark:focus-within:ring-google-blueDark/40 transition-all">
+                <div class="bg-white dark:bg-[#202124] rounded-3xl border border-slate-200/90 dark:border-slate-700/80 shadow-md px-4 py-2 flex items-end gap-2.5 focus-within:ring-2 focus-within:ring-google-blue/40 dark:focus-within:ring-google-blueDark/40 transition-all">
                     <textarea
                         id="aichat-input"
                         rows="1"
-                        placeholder="Pregunta sobre tus tareas, pide un análisis o conversa con tu IA..."
+                        placeholder="Escribe tu mensaje..."
                         autocomplete="off"
                         class="flex-1 bg-transparent border-0 outline-none resize-none text-sm md:text-base text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 py-1.5 max-h-[150px]"
                     ></textarea>
@@ -213,7 +213,7 @@
         </section>
 
         <!-- VISTA 2: Mis Conversaciones y Carpetas -->
-        <section class="aichat-view flex-1 flex flex-col" id="aichat-view-chats">
+        <section class="aichat-view hidden flex-1 min-h-0 flex flex-col overflow-y-auto py-4" id="aichat-view-chats">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
                 <div>
                     <h2 class="text-xl md:text-2xl font-bold text-slate-800 dark:text-slate-100">Mis Conversaciones</h2>
@@ -232,12 +232,12 @@
             </div>
 
             <!-- Barra de Carpetas -->
-            <div class="mb-4 overflow-x-auto pb-1">
+            <div class="mb-4 overflow-x-auto pb-1 shrink-0">
                 <div id="aichat-folders-bar" class="flex items-center gap-2 min-w-max" role="tablist" aria-label="Filtrar conversaciones por carpeta"></div>
             </div>
 
             <!-- Buscador -->
-            <div class="relative mb-5">
+            <div class="relative mb-4 shrink-0">
                 <span class="material-symbols-outlined text-[20px] text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2">search</span>
                 <input
                     type="search"
@@ -252,23 +252,25 @@
             </div>
 
             <!-- Lista de Chats -->
-            <div id="aichat-chats-list" class="space-y-3"></div>
+            <div id="aichat-chats-list" class="space-y-3 pb-4"></div>
         </section>
 
     </main>
 
-    <!-- Navegación Inferior Flotante -->
-    <nav class="fixed bottom-3 left-1/2 -translate-x-1/2 z-30 bg-white/95 dark:bg-[#202124]/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700/80 shadow-xl rounded-full p-1.5 flex items-center gap-1" aria-label="Navegación del Chat con IA">
-        <button type="button" class="aichat-bnav-tab active inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs md:text-sm font-semibold transition-all" data-aichat-tab="home" id="aichat-tab-home">
-            <span class="material-symbols-outlined text-[18px]">auto_awesome</span>
-            <span>Inicio / Chat</span>
-        </button>
-        <button type="button" class="aichat-bnav-tab inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs md:text-sm font-semibold transition-all" data-aichat-tab="chats" id="aichat-tab-chats">
-            <span class="material-symbols-outlined text-[18px]">forum</span>
-            <span>Chats</span>
-            <span id="aichat-total-badge" class="px-2 py-0.5 text-[11px] rounded-full bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold">0</span>
-        </button>
-    </nav>
+    <!-- Navegación Inferior Acoplada -->
+    <footer class="shrink-0 w-full px-4 pt-1 pb-3 flex justify-center">
+        <nav class="bg-white/95 dark:bg-[#202124]/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700/80 shadow-md rounded-full p-1.5 flex items-center gap-1" aria-label="Navegación del Chat con IA">
+            <button type="button" class="aichat-bnav-tab active inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs md:text-sm font-semibold transition-all" data-aichat-tab="home" id="aichat-tab-home">
+                <span class="material-symbols-outlined text-[18px]">auto_awesome</span>
+                <span>Inicio / Chat</span>
+            </button>
+            <button type="button" class="aichat-bnav-tab inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs md:text-sm font-semibold transition-all" data-aichat-tab="chats" id="aichat-tab-chats">
+                <span class="material-symbols-outlined text-[18px]">forum</span>
+                <span>Chats</span>
+                <span id="aichat-total-badge" class="px-2 py-0.5 text-[11px] rounded-full bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold">0</span>
+            </button>
+        </nav>
+    </footer>
 
     <!-- Modal: Renombrar Conversación -->
     <div id="aichat-rename-modal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">

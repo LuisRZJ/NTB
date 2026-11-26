@@ -808,8 +808,14 @@ function switchAIChatTab(tabName) {
   const viewChats = document.getElementById('aichat-view-chats');
   const tabHome = document.getElementById('aichat-tab-home');
   const tabChats = document.getElementById('aichat-tab-chats');
-  if (viewHome) viewHome.classList.toggle('active', activeAIChatTab === 'home');
-  if (viewChats) viewChats.classList.toggle('active', activeAIChatTab === 'chats');
+  if (viewHome) {
+    viewHome.classList.toggle('active', activeAIChatTab === 'home');
+    viewHome.classList.toggle('hidden', activeAIChatTab !== 'home');
+  }
+  if (viewChats) {
+    viewChats.classList.toggle('active', activeAIChatTab === 'chats');
+    viewChats.classList.toggle('hidden', activeAIChatTab !== 'chats');
+  }
   if (tabHome) tabHome.classList.toggle('active', activeAIChatTab === 'home');
   if (tabChats) tabChats.classList.toggle('active', activeAIChatTab === 'chats');
   if (activeAIChatTab === 'chats') {
@@ -971,7 +977,10 @@ function renderAIChatMessages(chat, scrollToBottom = false) {
   });
 
   if (scrollToBottom) {
-    requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    const wrap = document.getElementById('aichat-thread-wrap');
+    if (wrap) {
+      requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+    }
   }
 }
 
@@ -992,7 +1001,10 @@ function appendThinkingIndicator(statusText = 'Analizando y generando respuesta.
       <span class="aichat-thinking-label" id="aichat-thinking-label">${escHtml(statusText)}</span>
     </div>
   `;
-  requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+  const wrap = document.getElementById('aichat-thread-wrap');
+  if (wrap) {
+    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+  }
 }
 
 function removeThinkingIndicator() {
@@ -1671,7 +1683,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateAIChatGreeting();
   updateAIChatModelBadge();
   updateAIChatTotalBadge();
-  renderAIChatFoldersBar();
+  switchAIChatTab('home');
   buildAISystemContext().catch(() => {});
 
   // Wire eventos principales
@@ -1721,6 +1733,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('aichat-manage-folders-btn')?.addEventListener('click', () => openAIChatFoldersModal(false));
   document.getElementById('aichat-folders-modal-close')?.addEventListener('click', closeAIChatFoldersModal);
   document.getElementById('aichat-folders-modal-done')?.addEventListener('click', closeAIChatFoldersModal);
+  const foldersModalEl = document.getElementById('aichat-folders-modal');
+  if (foldersModalEl) foldersModalEl.addEventListener('click', e => { if (e.target === foldersModalEl) closeAIChatFoldersModal(); });
   document.getElementById('aichat-folder-save-btn')?.addEventListener('click', saveAIChatFolder);
   document.getElementById('aichat-folder-cancel-edit-btn')?.addEventListener('click', resetAIChatFolderForm);
   document.getElementById('aichat-folder-lock-dismiss-btn')?.addEventListener('click', hideFolderLockBanner);
@@ -1735,6 +1749,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('aichat-assign-folder-close')?.addEventListener('click', closeAssignFolderModal);
   document.getElementById('aichat-assign-folder-cancel')?.addEventListener('click', closeAssignFolderModal);
+  const assignModalEl = document.getElementById('aichat-assign-folder-modal');
+  if (assignModalEl) assignModalEl.addEventListener('click', e => { if (e.target === assignModalEl) closeAssignFolderModal(); });
   document.getElementById('aichat-assign-new-folder-btn')?.addEventListener('click', () => { closeAssignFolderModal(); openAIChatFoldersModal(true); });
 
   document.querySelectorAll('.aichat-starter-card[data-starter]').forEach(card => {
@@ -1769,12 +1785,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('aichat-rename-cancel')?.addEventListener('click', closeRenameChatModal);
   document.getElementById('aichat-rename-save')?.addEventListener('click', confirmRenameChat);
+  const renameModalEl = document.getElementById('aichat-rename-modal');
+  if (renameModalEl) renameModalEl.addEventListener('click', e => { if (e.target === renameModalEl) closeRenameChatModal(); });
   document.getElementById('aichat-rename-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); confirmRenameChat(); }
     if (e.key === 'Escape') closeRenameChatModal();
   });
   document.getElementById('aichat-delete-cancel')?.addEventListener('click', closeDeleteChatModal);
   document.getElementById('aichat-delete-confirm')?.addEventListener('click', confirmDeleteChat);
+  const deleteModalEl = document.getElementById('aichat-delete-modal');
+  if (deleteModalEl) deleteModalEl.addEventListener('click', e => { if (e.target === deleteModalEl) closeDeleteChatModal(); });
 
   wireAISettingsModal();
 });

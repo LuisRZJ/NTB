@@ -21,25 +21,32 @@ let _searchIndexDirty = true;
 let _searchIndex = [];
 let _searchResultCache = new Map();
 let _searchDebounceTimer = null;
-let _searchRenderLimit = 250;
+
 let _taskTitleMapCache = null;
 let _subtasksByParentMap = null;
 let _suggestionsAnalysisCache = null;
-const LIST_RENDER_STEP = 150;
-let _listRenderLimit = LIST_RENDER_STEP;
+
 const _isoWeekCache = new Map();
 let aiChats = [];
 let aiChatFolders = [];
 let _aiContextRevision = 0;
 let _aiContextCache = null;
 const _aiToolQueryCache = new Map();
-const SEARCH_RENDER_STEP = 250;
+
 const SEARCH_DEBOUNCE_MS = 130;
 const SEARCH_CACHE_LIMIT = 15;
 
-function markDirty() {
+function markDirty(searchTextChanged = true) {
   _dataDirty = true;
-  _searchIndexDirty = true;
+  invalidateTaskViews(searchTextChanged);
+  if (typeof scheduleAutoSync === 'function' && _cloudAutoSyncEnabled) scheduleAutoSync();
+}
+
+function invalidateTaskViews(searchTextChanged = true) {
+  if (searchTextChanged) {
+    _searchIndexDirty = true;
+    searchBuild = null;
+  }
   _searchResultCache.clear();
   _taskTitleMapCache = null;
   _subtasksByParentMap = null;
@@ -47,9 +54,7 @@ function markDirty() {
   _aiContextRevision++;
   _aiContextCache = null;
   _aiToolQueryCache.clear();
-  if (typeof scheduleAutoSync === 'function' && _cloudAutoSyncEnabled) {
-    scheduleAutoSync();
-  }
+  suggestionJob = null;
 }
 
 async function getCloudHeaders(extra = {}) {
@@ -146,7 +151,7 @@ function rebuildFilterButtons() {
       panel.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       filterMode = btn.dataset.filter;
-      _listRenderLimit = LIST_RENDER_STEP;
+
       const labels = { all:'Filtros', pending:'Pendientes', done:'Completadas' };
       for (const [k, c] of Object.entries(CATS)) labels[k] = c.label;
       for (const p of PROJECTS) labels['proj:' + p.id] = '◫ ' + p.name;
@@ -296,7 +301,7 @@ function formatDateNice(dateStr) {
   if (!dateStr) return '';
   const d = parseISODateLocal(dateStr);
   if (!d) return dateStr;
-  return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  return taskDates.short.format(d);
 }
 function formatDueLabel(dateStr) {
   if (!dateStr) return '';
@@ -310,25 +315,31 @@ function formatDueLabel(dateStr) {
   if (dateStr >= monday && dateStr <= sunday) {
     const d = parseISODateLocal(dateStr);
     if (!d) return formatDateNice(dateStr);
-    const name = d.toLocaleDateString('es-ES', { weekday: 'long' });
+    const name = taskDates.weekday.format(d);
     return name.charAt(0).toUpperCase() + name.slice(1);
   }
   return formatDateNice(dateStr);
 }
+const createdLabels = new WeakMap();
 function formatCreatedTime(t) {
+  const today = todayISO();
+  const cached = createdLabels.get(t);
+  if (cached && cached.today === today && cached.id === t.id) return cached.label;
   const d = new Date(t.id);
+  if (!Number.isFinite(d.getTime())) return t.time || '';
   const createdDate = formatISODateLocal(d);
-  const time = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  if (createdDate === todayISO()) return 'Creada hoy a las ' + time;
-  const date = d.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
-  return 'Creada el ' + date + ' a las ' + time;
+  const time = taskDates.time.format(d);
+  const label = createdDate === today ? 'Creada hoy a las ' + time : 'Creada el ' + taskDates.long.format(d) + ' a las ' + time;
+  createdLabels.set(t, { today, id: t.id, label });
+  return label;
 }
-function getDueStatus(dateStr, timeStr) {
+function getDueStatus(dateStr, timeStr, today = todayISO(), clock) {
   if (!dateStr) return '';
-  const t = todayISO();
+  const t = today;
   if (dateStr < t) return 'overdue';
   if (dateStr === t) {
     if (timeStr) {
+      if (clock && /^\d{2}:\d{2}$/.test(timeStr)) return clock > timeStr ? 'overdue' : 'today';
       const now = new Date();
       const [h, m] = timeStr.split(':').map(Number);
       const due = new Date(); due.setHours(h, m, 0, 0);
@@ -410,8 +421,8 @@ function formatRepeat(repeatVal) {
   return `cada ${n} ${labels[unit] || unit}`;
 }
 
-function isTaskOverdue(t) {
-  return !t.done && getDueStatus(t.due, t.dueTime) === 'overdue';
+function isTaskOverdue(t, today, clock) {
+  return !t.done && getDueStatus(t.due, t.dueTime, today, clock) === 'overdue';
 }
 
 // ── Inicialización del date picker ──
@@ -428,9 +439,6 @@ function initTimePicker() {
 }
 
 // ── Persistencia ──
-async function saveTasks() {
-  for (const t of tasks) await dbPut(t);
-}
 async function loadTasks() {
   tasks = await dbGetAll();
   tasks.sort((a, b) => b.id - a.id);
@@ -439,8 +447,8 @@ async function loadTasks() {
   if (toMigrate.length) {
     for (const t of toMigrate) {
       t.doneAt = t.due || formatISODateLocal(new Date(t.id));
-      await dbPut(t);
     }
+    await dbWriteBatch([{ store: STORE, values: toMigrate }]);
   }
 }
 
@@ -612,7 +620,15 @@ document.getElementById('new-task').addEventListener('keydown', e => {
   if (e.key === 'Enter') addTask();
 });
 
+const completingTasks = new Set();
 async function toggleDone(id) {
+  if (completingTasks.has(id)) return;
+  completingTasks.add(id);
+  try { await changeTaskCompletion(id); }
+  finally { completingTasks.delete(id); }
+}
+
+async function changeTaskCompletion(id) {
   const t = tasks.find(t => t.id === id);
   if (!t) return;
 
@@ -620,10 +636,7 @@ async function toggleDone(id) {
     // Archivar la ocurrencia completada (done:true) y crear la siguiente
     const childTasks = tasks.filter(task => task.parentId === t.id);
     // Marcar la ocurrencia actual como completada (queda como historial)
-    t.done = true;
-    t.doneAt = todayISO();
-    await dbPut(t);
-    if (typeof addHistoryEntry === 'function') await addHistoryEntry('completed', t);
+    const completed = { ...t, done: true, doneAt: todayISO() };
     const next = addRepeat(t.origDue || t.due, t.dueTime || '', t.repeat);
     const newTask = {
       id: now(),
@@ -641,28 +654,28 @@ async function toggleDone(id) {
       done: false,
       time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
     };
+    await dbWriteBatch([
+      { store: STORE, values: [completed, newTask, ...childTasks.map(child => ({ ...child, parentId: newTask.id }))] },
+      { store: HIST_STORE, values: [makeTaskHistoryEntry('completed', completed)] }
+    ]);
+    Object.assign(t, completed);
     tasks.unshift(newTask);
-    await dbPut(newTask);
-    // Reasignar subtareas al nuevo padre
-    for (const child of childTasks) {
-      child.parentId = newTask.id;
-      await dbPut(child);
-    }
+    for (const child of childTasks) child.parentId = newTask.id;
     markDirty();
     render();
     showToast(`🔁 Reprogramada para ${formatDateNice(next.due)}`, {
       undo: true,
       onUndo: async () => {
         // Borrar la nueva ocurrencia, restaurar el padre original como pendiente
+        await dbWriteBatch([
+          { store: STORE, remove: true, values: [newTask.id] },
+          { store: STORE, values: [{ ...t, done: false, doneAt: null }, ...childTasks.map(child => ({ ...child, parentId: t.id }))] }
+        ]);
         tasks = tasks.filter(task => task.id !== newTask.id);
-        await dbDelete(newTask.id);
         t.done = false;
         t.doneAt = null;
-        await dbPut(t);
-        for (const child of childTasks) {
-          child.parentId = t.id;
-          await dbPut(child);
-        }
+        for (const child of childTasks) child.parentId = t.id;
+        markDirty();
         render();
       }
     });
@@ -677,16 +690,12 @@ async function toggleDone(id) {
     }
     // Completar tarea sin fecha: asignarle la fecha de hoy para que aparezca en Todo
     const hadDue = t.due;
-    if (!t.done && !t.due) {
-      t.due = todayISO();
-    }
-    if (!t.done) { t.doneAt = todayISO(); } else { t.doneAt = null; }
-    t.done = !t.done;
-    await dbPut(t);
-    if (typeof addHistoryEntry === 'function') {
-      await addHistoryEntry(t.done ? 'completed' : 'reopened', t);
-    }
-    markDirty();
+    const done = !t.done;
+    const update = { ...t, done, doneAt: done ? todayISO() : null, due: done && !t.due ? todayISO() : t.due };
+    const entry = makeTaskHistoryEntry(done ? 'completed' : 'reopened', update);
+    await dbWriteBatch([{ store: STORE, values: [update] }, { store: HIST_STORE, values: [entry] }]);
+    Object.assign(t, update);
+    markDirty(false);
     render();
     if (t.done) {
       showToast('🎉 ¡Tarea completada!', {
@@ -696,6 +705,7 @@ async function toggleDone(id) {
           t.doneAt = null;
           if (!hadDue) t.due = '';
           await dbPut(t);
+          markDirty(false);
           render();
         }
       });
@@ -724,70 +734,56 @@ async function executeCompleteParent(action) {
   const subs = _pendingCompleteSubs;
   _pendingCompleteParent = null;
   _pendingCompleteSubs = null;
-  const hadDue = t.due;
-  if (!t.due) t.due = todayISO();
-  t.done = true;
-  t.doneAt = todayISO();
-  await dbPut(t);
-  if (action === 'free') {
-    // Desvincula las subtareas pendientes: pasan a ser tareas independientes
-    for (const s of subs) { s.parentId = null; await dbPut(s); }
-  } else if (action === 'all') {
-    // Marca todas las subtareas pendientes como completadas
-    for (const s of subs) {
-      if (!s.due) s.due = todayISO();
-      s.done = true;
-      s.doneAt = todayISO();
-      await dbPut(s);
-    }
-  }
+  const previous = { due: t.due, doneAt: t.doneAt, done: t.done };
+  const originalSubs = subs.map(s => ({ task: s, due: s.due, doneAt: s.doneAt, done: s.done, parentId: s.parentId }));
+  const today = todayISO();
+  const parentChange = { done: true, due: t.due || today, doneAt: today };
+  const updates = subs.map(s => action === 'free' ? { ...s, parentId: null } : { ...s, done: true, due: s.due || today, doneAt: today });
+  await dbWriteBatch([{ store: STORE, values: [{ ...t, ...parentChange }, ...updates] }]);
+  Object.assign(t, parentChange);
+  subs.forEach((sub, i) => Object.assign(sub, updates[i]));
   markDirty();
   render();
-  if (!handleDetailAfterCompletion(t.id) && detailStack.length) {
-    renderDetailBody(detailStack[detailStack.length - 1]);
-  }
+  if (!handleDetailAfterCompletion(t.id) && detailStack.length) renderDetailBody(detailStack[detailStack.length - 1]);
   showToast('🎉 ¡Tarea completada!', {
     undo: true,
     onUndo: async () => {
-      t.done = false;
-      t.doneAt = null;
-      if (!hadDue) t.due = '';
-      await dbPut(t);
-      if (action === 'free') {
-        for (const s of subs) { s.parentId = t.id; await dbPut(s); }
-      } else if (action === 'all') {
-        for (const s of subs) { s.done = false; s.doneAt = null; await dbPut(s); }
-      }
+      const restored = originalSubs.map(({ task, ...fields }) => ({ ...task, ...fields }));
+      await dbWriteBatch([{ store: STORE, values: [{ ...t, ...previous }, ...restored] }]);
+      Object.assign(t, previous);
+      subs.forEach((sub, i) => Object.assign(sub, restored[i]));
+      markDirty();
       render();
+      if (detailStack.length) renderDetailBody(detailStack[detailStack.length - 1]);
     }
   });
 }
 
 async function deleteTask(id) {
   const deleted = tasks.find(t => t.id === id);
-  // Cascade delete subtasks recursively
-  const toDelete = [id];
-  const collectChildren = (pid) => {
-    tasks.filter(t => t.parentId === pid).forEach(t => { toDelete.push(t.id); collectChildren(t.id); });
-  };
-  collectChildren(id);
-  const removedTasks = tasks.filter(t => toDelete.includes(t.id));
-  tasks = tasks.filter(t => !toDelete.includes(t.id));
-  // Registrar en historial ANTES de borrar de la BD
-  if (typeof addHistoryEntry === 'function' && deleted) {
-    await addHistoryEntry('deleted', deleted);
+  const children = getSubtasksMap();
+  const toDelete = new Set([id]);
+  for (const parent of toDelete) {
+    for (const child of children.get(parent) || []) toDelete.add(child.id);
   }
-  for (const tid of toDelete) await dbDelete(tid);
+  const removedTasks = tasks.filter(t => toDelete.has(t.id));
+  // Registrar en historial ANTES de borrar de la BD
+  const changes = [{ store: STORE, remove: true, values: [...toDelete] }];
+  if (deleted) changes.push({ store: HIST_STORE, values: [makeTaskHistoryEntry('deleted', deleted)] });
+  await dbWriteBatch(changes);
+  tasks = tasks.filter(t => !toDelete.has(t.id));
   markDirty();
   render();
   if (detailStack.length) {
-    if (toDelete.includes(detailStack[detailStack.length - 1])) closeTaskDetail();
+    if (toDelete.has(detailStack[detailStack.length - 1])) closeTaskDetail();
     else renderDetailBody(detailStack[detailStack.length - 1]);
   }
   showToast('🗑 Tarea eliminada', {
     undo: true,
     onUndo: async () => {
-      for (const t of removedTasks) { tasks.unshift(t); await dbPut(t); }
+      await dbWriteBatch([{ store: STORE, values: removedTasks }]);
+      tasks = removedTasks.concat(tasks);
+      markDirty();
       render();
       if (detailStack.length) renderDetailBody(detailStack[detailStack.length - 1]);
     }
@@ -876,45 +872,47 @@ function getSearchScore(entry, q) {
   if (entry.project.includes(q)) score += 3;
   if (entry.categories.includes(q)) score += 3;
   if (entry.parentTitle.includes(q)) score += 2;
-  if (!entry.done) score += 1;
+  if (!entry.task.done) score += 1;
   return score;
 }
 
-function rebuildSearchIndexIfNeeded() {
-  if (!_searchIndexDirty && _searchIndex.length === tasks.length) return;
-
+let searchBuild = null;
+function prepareSearchIndex() {
+  if (!_searchIndexDirty && _searchIndex.length === tasks.length) return true;
+  if (searchBuild) return false;
+  const entries = [];
+  searchBuild = entries;
   const titles = getTaskTitleMap();
-  const projById = new Map(PROJECTS.map(p => [String(p.id), normalizeSearchText(p.name || '')]));
-
-  _searchIndex = tasks.map(t => {
-    const text = normalizeSearchText(t.text);
-    const desc = normalizeSearchText(t.desc);
-    const project = t.project ? (projById.get(String(t.project)) || '') : '';
-    const categories = normalizeSearchText(getTaskCats(t).map(key => (CATS[key]?.label || key)).join(' '));
-    const parentTitle = t.parentId ? normalizeSearchText(titles.get(t.parentId) || '') : '';
-    const blob = [text, desc, project, categories, parentTitle].join(' ');
-    return {
-      task: t,
-      id: t.id,
-      done: !!t.done,
-      text,
-      desc,
-      project,
-      categories,
-      parentTitle,
-      blob
-    };
-  });
-
-  _searchIndexDirty = false;
-  _searchResultCache.clear();
+  const projects = new Map(PROJECTS.map(p => [String(p.id), normalizeSearchText(p.name)]));
+  const categories = new Map(Object.entries(CATS).map(([key, cat]) => [key, normalizeSearchText(cat.label || key)]));
+  function advance() {
+    if (searchBuild !== entries) return;
+    const end = performance.now() + 4;
+    while (entries.length < tasks.length) {
+      const t = tasks[entries.length];
+      const text = normalizeSearchText(t.text);
+      const desc = normalizeSearchText(t.desc);
+      const project = projects.get(String(t.project)) || '';
+      const labels = getTaskCats(t).map(key => categories.get(key) || normalizeSearchText(key)).join(' ');
+      const parentTitle = t.parentId ? normalizeSearchText(titles.get(t.parentId)) : '';
+      entries.push({ task: t, id: t.id, text, desc, project, categories: labels, parentTitle,
+        blob: [text, desc, project, labels, parentTitle].join(' ') });
+      if (entries.length % 64 === 0 && performance.now() >= end) break;
+    }
+    if (entries.length < tasks.length) { setTimeout(advance, 0); return; }
+    searchBuild = null;
+    _searchIndex = entries;
+    _searchIndexDirty = false;
+    if (searchQuery.trim()) render();
+  }
+  setTimeout(advance, 0);
+  return false;
 }
 
 function searchTasksGlobal(query) {
   const q = normalizeSearchText(query).trim();
   if (!q) return [];
 
-  rebuildSearchIndexIfNeeded();
 
   if (_searchResultCache.has(q)) return _searchResultCache.get(q);
 
@@ -926,7 +924,7 @@ function searchTasksGlobal(query) {
 
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (a.entry.done !== b.entry.done) return a.entry.done ? 1 : -1;
+    if (!!a.entry.task.done !== !!b.entry.task.done) return a.entry.task.done ? 1 : -1;
     return b.entry.id - a.entry.id;
   });
 
@@ -939,18 +937,15 @@ function searchTasksGlobal(query) {
   return result;
 }
 
-function priorityTasks() {
-  if (priFilter === 'all' || priFilter === 'suggestions') return tasks.filter(t => !t.parentId);
-  return tasks.filter(t => !t.parentId && t.pri === priFilter);
-}
-
 function applyDateScope(src) {
   if (dateScope === 'today') {
     const todayStr = todayISO();
     return src.filter(t => isTaskScheduledForDate(t, todayStr));
   }
-  if (dateScope === 'tomorrow') return src.filter(t => t.due === addDays(todayISO(), 1));
-  if (dateScope === 'dayafter') return src.filter(t => t.due === addDays(todayISO(), 2));
+  if (dateScope === 'tomorrow' || dateScope === 'dayafter') {
+    const target = addDays(todayISO(), dateScope === 'tomorrow' ? 1 : 2);
+    return src.filter(t => t.due === target);
+  }
   if (dateScope === 'week') {
     const d = new Date();
     const day = d.getDay();
@@ -981,14 +976,6 @@ function applyFilterMode(src) {
   }
 }
 
-function scopedTasks() {
-  return applyDateScope(priorityTasks());
-}
-
-function filteredTasks() {
-  return sortTasks(applyFilterMode(scopedTasks()));
-}
-
 // Pendientes: fecha asc (vencidas primero, sin fecha al final)
 // Completadas: fecha desc (recientes primero, más antiguas al fondo)
 function sortTasks(arr) {
@@ -1010,24 +997,49 @@ function _safeEscSuggest(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function getSuggestionsAnalysis() {
-  if (_suggestionsAnalysisCache) return _suggestionsAnalysisCache;
+let suggestionJob = null;
+function refreshSuggestions() {
+  if (_suggestionsAnalysisCache || suggestionJob) return;
+  const job = buildSuggestions();
+  suggestionJob = job;
+  function advance() {
+    if (suggestionJob !== job) return;
+    const until = performance.now() + 4;
+    let step;
+    do { step = job.next(); } while (!step.done && performance.now() < until);
+    if (!step.done) { setTimeout(advance, 0); return; }
+    suggestionJob = null;
+    _suggestionsAnalysisCache = step.value;
+    document.getElementById('countSugerencias').textContent = step.value.suggestions.length;
+    if (priFilter === 'suggestions' && !searchQuery.trim()) {
+      renderSuggestionsView(document.getElementById('task-list'));
+    }
+  }
+  setTimeout(advance, 0);
+}
+
+function* buildSuggestions() {
   const pendingTop = tasks.filter(t => !t.done && !t.parentId);
   const doneTop = tasks.filter(t => t.done && !t.parentId);
   const totalTop = pendingTop.length + doneTop.length;
-  const overdueTasks = pendingTop.filter(t => isTaskOverdue(t));
   const todayStr = todayISO();
+  const clock = new Date().toTimeString().slice(0, 8);
+  const overdueTasks = pendingTop.filter(t => isTaskOverdue(t, todayStr, clock));
   const todayPending = pendingTop.filter(t => isTaskScheduledForDate(t, todayStr));
 
   const suggestions = [];
+  const suggestedIds = new Set();
+  let scanned = 0;
 
   // 1. Bucle de aplazamiento (pospuestas >= 2 veces o postergadas >= 3 días desde origDue)
-  pendingTop.forEach(t => {
+  for (const t of pendingTop) {
+    if (++scanned % 128 === 0) yield;
     const snoozedCount = Array.isArray(t.snoozedDates) ? t.snoozedDates.length : 0;
-    const diffDays = (t.origDue && t.due) ? Math.round((new Date(t.due) - new Date(t.origDue)) / 86400000) : 0;
+    const diffDays = (t.origDue && t.due && t.origDue !== t.due) ? Math.round((new Date(t.due) - new Date(t.origDue)) / 86400000) : 0;
     if (snoozedCount >= 2 || diffDays >= 3) {
       const timesLabel = snoozedCount >= 2 ? `${snoozedCount} veces` : `${diffDays} días`;
-      suggestions.push({
+      suggestedIds.add(t.id);
+      suggestions.push({ type: 'snooze', card: () => ({
         id: `snooze-${t.id}`,
         type: 'snooze',
         tagClass: 'snooze',
@@ -1042,16 +1054,18 @@ function getSuggestionsAnalysis() {
           { action: 'reschedule-week', label: 'Reprogramar +7d', primary: false, taskId: t.id },
           ...(t.pri === 'high' ? [{ action: 'lower-priority', label: 'Bajar a Media', primary: false, taskId: t.id }] : [])
         ]
-      });
+      }) });
     }
-  });
+  }
 
   // 2. Vencidas crónicas (vencidas hace más de 2 días)
   const twoDaysAgo = addDays(todayStr, -2);
-  pendingTop.forEach(t => {
-    if (isTaskOverdue(t) && t.due && t.due <= twoDaysAgo) {
-      if (suggestions.some(s => s.taskId === t.id && s.type === 'snooze')) return;
-      suggestions.push({
+  for (const t of pendingTop) {
+    if (++scanned % 128 === 0) yield;
+    if (isTaskOverdue(t, todayStr, clock) && t.due && t.due <= twoDaysAgo) {
+      if (suggestedIds.has(t.id)) continue;
+      suggestedIds.add(t.id);
+      suggestions.push({ type: 'overdue', card: () => ({
         id: `overdue-${t.id}`,
         type: 'overdue',
         tagClass: 'overdue',
@@ -1066,19 +1080,21 @@ function getSuggestionsAnalysis() {
           { action: 'clear-due', label: 'Pasar a "Sin fecha"', primary: false, taskId: t.id },
           { action: 'complete-task', label: 'Completar ahora', primary: false, taskId: t.id }
         ]
-      });
+      }) });
     }
-  });
+  }
 
   // 3. Victorias rápidas (subtareas con 66%+ de avance o solo 1 subtarea pendiente)
-  pendingTop.forEach(t => {
+  for (const t of pendingTop) {
+    if (++scanned % 128 === 0) yield;
     const subs = getSubtasks(t.id);
-    if (!subs.length) return;
+    if (!subs.length) continue;
     const subsDone = subs.filter(s => s.done).length;
     const remaining = subs.length - subsDone;
     if (remaining > 0 && subsDone > 0 && (remaining === 1 || subsDone / subs.length >= 0.66)) {
       const pct = Math.round(subsDone / subs.length * 100);
-      suggestions.push({
+      suggestedIds.add(t.id);
+      suggestions.push({ type: 'quickwin', card: () => ({
         id: `quickwin-${t.id}`,
         type: 'quickwin',
         tagClass: 'quickwin',
@@ -1092,19 +1108,21 @@ function getSuggestionsAnalysis() {
           { action: 'open-detail', label: 'Ver última subtarea', primary: true, taskId: t.id },
           { action: 'complete-task', label: 'Cerrar tarea padre', primary: false, taskId: t.id }
         ]
-      });
+      }) });
     }
-  });
+  }
 
   // 4. Fricción monolítica (descripción extensa o título largo sin ninguna subtarea)
-  pendingTop.forEach(t => {
+  for (const t of pendingTop) {
+    if (++scanned % 128 === 0) yield;
     const subs = getSubtasks(t.id);
-    if (subs.length > 0) return;
+    if (subs.length > 0) continue;
     const descLen = (t.desc || '').trim().length;
     const titleLen = (t.text || '').trim().length;
     if (descLen >= 80 || titleLen >= 60) {
-      if (suggestions.some(s => s.taskId === t.id)) return;
-      suggestions.push({
+      if (suggestedIds.has(t.id)) continue;
+      suggestedIds.add(t.id);
+      suggestions.push({ type: 'monolith', card: () => ({
         id: `monolith-${t.id}`,
         type: 'monolith',
         tagClass: 'monolith',
@@ -1117,9 +1135,9 @@ function getSuggestionsAnalysis() {
         actions: [
           { action: 'open-detail', label: 'Añadir subtareas', primary: true, taskId: t.id }
         ]
-      });
+      }) });
     }
-  });
+  }
 
   // 5. Inflación de prioridad (más del 60% de pendientes en Alta con al menos 4 tareas)
   if (pendingTop.length >= 4) {
@@ -1127,7 +1145,7 @@ function getSuggestionsAnalysis() {
     const ratio = highTasks.length / pendingTop.length;
     if (ratio >= 0.60) {
       const pct = Math.round(ratio * 100);
-      suggestions.push({
+      suggestions.push({ type: 'priority', card: () => ({
         id: 'priority-inflation',
         type: 'priority',
         tagClass: 'priority',
@@ -1140,13 +1158,13 @@ function getSuggestionsAnalysis() {
         actions: [
           { action: 'rebalance-high', label: 'Rebalancear excedente a Media', primary: true, taskId: null }
         ]
-      });
+      }) });
     }
   }
 
   // 6. Sobrecarga de la jornada (más de 6 tareas pendientes para hoy o >= 4 altas)
   if (todayPending.length >= 6 || todayPending.filter(t => t.pri === 'high').length >= 4) {
-    suggestions.push({
+    suggestions.push({ type: 'overload', card: () => ({
       id: 'daily-overload',
       type: 'overload',
       tagClass: 'overload',
@@ -1159,7 +1177,7 @@ function getSuggestionsAnalysis() {
       actions: [
         { action: 'defer-secondary-tomorrow', label: 'Diferir secundarias a mañana', primary: true, taskId: null }
       ]
-    });
+    }) });
   }
 
   // ── Salud del Flujo (Health Score 0-100) ──
@@ -1189,7 +1207,7 @@ function getSuggestionsAnalysis() {
 
   const completionRate = totalTop ? Math.round(doneTop.length / totalTop * 100) : 100;
 
-  _suggestionsAnalysisCache = {
+  return {
     healthScore,
     healthGrade,
     pendingCount: pendingTop.length,
@@ -1197,7 +1215,6 @@ function getSuggestionsAnalysis() {
     completionRate,
     suggestions
   };
-  return _suggestionsAnalysisCache;
 }
 
 async function handleSuggestionAction(action, taskId) {
@@ -1262,10 +1279,8 @@ async function handleSuggestionAction(action, taskId) {
       showToast('No hay tareas excedentes para rebalancear');
       return;
     }
-    for (const t of toUpdate) {
-      t.pri = 'mid';
-      await dbPut(t);
-    }
+    await dbWriteBatch([{ store: STORE, values: toUpdate.map(t => ({ ...t, pri: 'mid' })) }]);
+    for (const t of toUpdate) t.pri = 'mid';
     markDirty();
     render();
     showToast(`⚡ Se rebalancearon ${toUpdate.length} tareas a prioridad Media`);
@@ -1280,10 +1295,8 @@ async function handleSuggestionAction(action, taskId) {
       return;
     }
     const tomorrowStr = addDays(todayStr, 1);
-    for (const t of toDefer) {
-      t.due = tomorrowStr;
-      await dbPut(t);
-    }
+    await dbWriteBatch([{ store: STORE, values: toDefer.map(t => ({ ...t, due: tomorrowStr })) }]);
+    for (const t of toDefer) t.due = tomorrowStr;
     markDirty();
     render();
     showToast(`📅 Se difirieron ${toDefer.length} tareas para mañana`);
@@ -1292,10 +1305,17 @@ async function handleSuggestionAction(action, taskId) {
 }
 
 function renderSuggestionsView(container) {
-  const analysis = getSuggestionsAnalysis();
+  const analysis = _suggestionsAnalysisCache;
+  if (!analysis) {
+    if (!container.querySelector('.suggestions-view')) container.textContent = 'Calculando sugerencias…';
+    refreshSuggestions();
+    return;
+  }
   const { healthScore, healthGrade, pendingCount, overdueCount, completionRate, suggestions } = analysis;
 
-  const cardsHtml = suggestions.map(s => {
+  const page = taskPage(container, 'suggestions', suggestions);
+  const cardsHtml = page.items.map(entry => {
+    const s = entry.card();
     const priColor = s.taskPri === 'high' ? 'red' : s.taskPri === 'mid' ? 'amber' : 'green';
     const priLabel = s.taskPri === 'high' ? 'Alta' : s.taskPri === 'mid' ? 'Media' : 'Baja';
     const clickAttr = s.taskId ? `onclick="openTaskDetail(${s.taskId})" role="button" tabindex="0"` : '';
@@ -1396,6 +1416,7 @@ function renderSuggestionsView(container) {
     </div>
   `;
 
+  page.mount(() => renderSuggestionsView(container));
   // Asignar listeners a los botones de acción
   const actionBtns = container.querySelectorAll('.btn-suggestion-action');
   actionBtns.forEach(btn => {
@@ -1408,44 +1429,58 @@ function renderSuggestionsView(container) {
   });
 }
 
+let lastDashboard;
+function getTaskDashboard(today, clock, searchResults) {
+  const key = JSON.stringify([_aiContextRevision, today, clock.slice(0, 5), priFilter, dateScope, filterMode, searchQuery]);
+  if (lastDashboard?.key === key) return lastDashboard;
+  const scoped = applyDateScope(tasks.filter(t => !t.parentId));
+  const pool = searchQuery.trim() ? searchResults : applyFilterMode(scoped);
+  const priorities = { high: 0, mid: 0, low: 0, total: pool.length };
+  for (const t of pool) if (t.pri in priorities) priorities[t.pri]++;
+  const allFiltered = searchQuery.trim() ? searchResults : priFilter === 'suggestions' ? []
+    : sortTasks(priFilter === 'all' ? pool : pool.filter(t => t.pri === priFilter));
+  let tTotal = 0, tDone = 0, tOverdue = 0, snoozedCount = 0;
+  const preview = [];
+  const category = filterMode in CATS;
+  const project = filterMode.startsWith('proj:') ? filterMode.slice(5) : null;
+  for (const t of tasks) {
+    if (category && !getTaskCats(t).includes(filterMode)) continue;
+    if (project !== null && String(t.project) !== project) continue;
+    if (isTaskScheduledForDate(t, today)) {
+      tTotal++;
+      if (t.done) tDone++;
+      else if (isTaskOverdue(t, today, clock)) tOverdue++;
+    }
+    if (t.snoozedDates?.includes(today)) {
+      snoozedCount++;
+      if (preview.length < 3) preview.push(escHtml((t.text || 'Sin título').trim()));
+    }
+  }
+  lastDashboard = { key, allFiltered, tTotal, tDone, tOverdue, snoozedCount, priorities,
+    snoozedPreview: preview.join(' · '), snoozedMore: snoozedCount > 3 ? ' +' + (snoozedCount - 3) + ' más' : '',
+    scopedCount: scoped.length, scopedDone: scoped.reduce((n, t) => n + Number(!!t.done), 0) };
+  return lastDashboard;
+}
+
 function render() {
   const list = document.getElementById('task-list');
   const searchActive = !!searchQuery.trim();
+  if (searchActive && !prepareSearchIndex()) {
+    if (!list.hasAttribute('aria-busy')) list.textContent = 'Buscando…';
+    list.setAttribute('aria-busy', 'true');
+    document.getElementById('list-label').textContent = 'Buscando…';
+    if (currentDetailProjId) renderProjectDetailTasks();
+    return;
+  }
+  list.removeAttribute('aria-busy');
   const searchResults = searchActive ? searchTasksGlobal(searchQuery) : [];
-  const allFiltered = filteredTasks();
-  const visible = searchActive 
-    ? searchResults.slice(0, _searchRenderLimit) 
-    : (allFiltered.length > _listRenderLimit ? allFiltered.slice(0, _listRenderLimit) : allFiltered);
-  const scoped  = searchActive ? searchResults : scopedTasks();
-  const searchTotal = searchActive ? searchResults.length : allFiltered.length;
   const todayStr = todayISO();
-
-  // ── Anillo de progreso: todas las tareas y subtareas de hoy, filtrado por categoría o proyecto ──
-  const isCatFilter = filterMode in CATS;
-  const isProjFilter = filterMode.startsWith('proj:');
-  const todayAll = tasks.filter(t => {
-    if (!isTaskScheduledForDate(t, todayStr)) return false;
-    if (isCatFilter) return getTaskCats(t).includes(filterMode);
-    if (isProjFilter) return String(t.project) === filterMode.slice(5);
-    return true;
-  });
-  const snoozedTodayTasks = tasks.filter(t => {
-    if (!Array.isArray(t.snoozedDates) || !t.snoozedDates.includes(todayStr)) return false;
-    if (isCatFilter) return getTaskCats(t).includes(filterMode);
-    if (isProjFilter) return String(t.project) === filterMode.slice(5);
-    return true;
-  });
-  const snoozedPreview = snoozedTodayTasks
-    .slice(0, 3)
-    .map(t => (t.text || 'Sin título').trim())
-    .join(' · ');
-  const snoozedMore = snoozedTodayTasks.length > 3 ? ` +${snoozedTodayTasks.length - 3} más` : '';
-  const tTotal   = todayAll.length;
-  const tDone    = todayAll.filter(t => t.done).length;
-  const tOverdue = todayAll.filter(t => isTaskOverdue(t)).length;
-  const isToday  = dateScope === 'today';
-  const allDoneNoOverdue = tTotal > 0 && tDone === tTotal && tOverdue === 0;
-  const pct = tTotal ? (allDoneNoOverdue ? 100 : Math.min(Math.round(tDone/tTotal*100), 99)) : 0;
+  const clock = new Date().toTimeString().slice(0, 8);
+  const dashboard = getTaskDashboard(todayStr, clock, searchResults);
+  const { allFiltered, tTotal, tDone, tOverdue, snoozedCount, snoozedPreview, snoozedMore, priorities, scopedCount, scopedDone } = dashboard;
+  const searchTotal = allFiltered.length;
+  const isToday = dateScope === 'today';
+  const pct = tTotal ? (tDone === tTotal && !tOverdue ? 100 : Math.min(Math.round(tDone / tTotal * 100), 99)) : 0;
 
   const circ = 100;
   const ringFill = document.getElementById('ring-fill');
@@ -1455,21 +1490,16 @@ function render() {
   const ringWrap = ringFill ? ringFill.closest('.progress-ring') : null;
 
   // Actualizar contadores de las píldoras segmentadas de prioridad (independientes de priFilter activo)
-  const allTopScoped = applyDateScope(tasks.filter(t => !t.parentId));
-  const allPriPool = searchActive ? searchResults : applyFilterMode(allTopScoped);
   const cTodas = document.getElementById('countTodas');
   const cSugerencias = document.getElementById('countSugerencias');
   const cAlta  = document.getElementById('countAlta');
   const cMedia = document.getElementById('countMedia');
   const cBaja  = document.getElementById('countBaja');
-  if (cTodas) cTodas.textContent = allPriPool.length;
-  if (cSugerencias) {
-    const analysis = getSuggestionsAnalysis();
-    cSugerencias.textContent = analysis.suggestions.length;
-  }
-  if (cAlta)  cAlta.textContent  = allPriPool.filter(t => t.pri === 'high').length;
-  if (cMedia) cMedia.textContent = allPriPool.filter(t => t.pri === 'mid').length;
-  if (cBaja)  cBaja.textContent  = allPriPool.filter(t => t.pri === 'low').length;
+  if (cTodas) cTodas.textContent = priorities.total;
+  if (cSugerencias) refreshSuggestions();
+  if (cAlta)  cAlta.textContent  = priorities.high;
+  if (cMedia) cMedia.textContent = priorities.mid;
+  if (cBaja)  cBaja.textContent  = priorities.low;
 
   if (isToday) {
     if (ringWrap) ringWrap.classList.remove('ring-disabled');
@@ -1481,8 +1511,8 @@ function render() {
         `<div class="ring-tip-row"><span>Pendientes</span><span>${tTotal - tDone}</span></div>` +
         `<div class="ring-tip-row"><span>Completadas</span><span>${tDone}</span></div>` +
         `<div class="ring-tip-row ${tOverdue ? 'overdue' : ''}"><span>Vencidas</span><span>${tOverdue}</span></div>` +
-        `<div class="ring-tip-row ring-tip-row-snoozed"><span>Pospuestas hoy</span><span>${snoozedTodayTasks.length}</span></div>` +
-        (snoozedTodayTasks.length
+        `<div class="ring-tip-row ring-tip-row-snoozed"><span>Pospuestas hoy</span><span>${snoozedCount}</span></div>` +
+        (snoozedCount
           ? `<div class="ring-tip-note">${snoozedPreview}${snoozedMore}</div>`
           : '');
     }
@@ -1493,8 +1523,8 @@ function render() {
     if (ringPct) ringPct.style.color = 'var(--text)';
   } else {
     if (ringWrap) ringWrap.classList.remove('ring-disabled');
-    const sTotalCount = allTopScoped.length;
-    const sDoneCount  = allTopScoped.filter(t => t.done).length;
+    const sTotalCount = scopedCount;
+    const sDoneCount = scopedDone;
     const scopedPct   = sTotalCount ? Math.round(sDoneCount / sTotalCount * 100) : 0;
     if (ringPct) ringPct.textContent = scopedPct + '%';
     if (ringFraction) ringFraction.textContent = `${sDoneCount} de ${sTotalCount}`;
@@ -1509,9 +1539,6 @@ function render() {
   }
 
   // ── Etiqueta de lista: basada en datos del scope activo ──
-  const sTotal   = scoped.length;
-  const sDone    = scoped.filter(t => t.done).length;
-  const sOverdue = scoped.filter(t => isTaskOverdue(t)).length;
   const scopeLabel  = { today: 'hoy', tomorrow: 'mañana', dayafter: 'pasadomañana', week: 'esta semana', month: 'este mes', nodate: 'sin fecha', all: 'todas' };
   const scopeText   = (scopeLabel[dateScope] || 'hoy').toUpperCase();
 
@@ -1526,11 +1553,15 @@ function render() {
     }
   }
 
+  if (currentDetailProjId) renderProjectDetailTasks();
   if (!searchActive && priFilter === 'suggestions') {
     renderSuggestionsView(list);
     return;
   }
 
+  const view = searchActive ? 'search:' + searchQuery : [priFilter, dateScope, filterMode].join('/');
+  const page = taskPage(list, view, allFiltered);
+  const visible = page.items;
   if (!visible.length) {
     list.innerHTML = searchActive
       ? `<div class="empty">
@@ -1551,89 +1582,72 @@ function render() {
     return;
   }
 
-  if (!searchActive && ['all', 'week', 'month'].includes(dateScope)) {
-    // Agrupar por fecha de vencimiento
-    const groups = new Map();
-    for (const t of visible) {
-      const key = t.due || '__nodate__';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(t);
-    }
-    // Grupos con al menos 1 pendiente → orden asc (vencidos primero)
-    // Grupos 100% completados → orden desc (recientes primero, más antiguas al fondo)
-    const allKeys = [...groups.keys()];
-    const pendingKeys = allKeys
-      .filter(k => groups.get(k).some(t => !t.done))
-      .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-    const doneKeys = allKeys
-      .filter(k => groups.get(k).every(t => t.done))
-      .sort((a, b) => a > b ? -1 : a < b ? 1 : 0);
-    const sortedKeys = [...pendingKeys, ...doneKeys];
-    const today = todayISO();
-    list.innerHTML = sortedKeys.map(key => {
-      const items = groups.get(key);
-      let label;
-      if (key === '__nodate__') label = 'Sin fecha';
-      else if (key === today) label = 'Hoy · ' + formatDateNice(key);
-      else if (key === addDays(today, 1)) label = 'Mañana · ' + formatDateNice(key);
-      else if (key === addDays(today, 2)) label = 'Pasadomañana · ' + formatDateNice(key);
-      else label = formatDateNice(key);
-      const count = items.length === 1 ? '1 tarea' : `${items.length} tareas`;
-      return `<div class="task-group">
-        <div class="task-group-header">
-          <span class="task-group-label">${label}</span>
-          <span class="task-group-line"></span>
-          <span class="task-group-count">${count}</span>
-        </div>
-        ${items.map(t => renderTaskItem(t)).join('')}
-      </div>`;
-    }).join('');
-  } else {
-    list.innerHTML = visible.map(t => renderTaskItem(t)).join('');
+  const grouped = !searchActive && ['all', 'week', 'month'].includes(dateScope);
+  const rows = [];
+  const tomorrow = addDays(todayStr, 1);
+  const dayAfter = addDays(todayStr, 2);
+  const counts = new Map();
+  if (grouped) {
+    for (const t of allFiltered) counts.set(t.due, (counts.get(t.due) || 0) + 1);
   }
+  let previous = null;
+  for (const t of visible) {
+    if (grouped && t.due !== previous) {
+      previous = t.due;
+      const prefix = t.due === todayStr ? 'Hoy · ' : t.due === tomorrow ? 'Mañana · ' : t.due === dayAfter ? 'Pasadomañana · ' : '';
+      const label = t.due ? prefix + formatDateNice(t.due) : 'Sin fecha';
+      const count = counts.get(t.due);
+      rows.push({ key: 'due-' + t.due, html: `<div class="task-group-header"><span class="task-group-label">${label}</span><span class="task-group-line"></span><span class="task-group-count">${count} ${count === 1 ? 'tarea' : 'tareas'}</span></div>` });
+    }
+    rows.push({ key: t.id, html: renderTaskItem(t) });
+  }
+  updateTaskRows(list, rows);
+  page.mount(render);
+}
 
-  if (searchActive) {
-    const shown = visible.length;
-    const remain = Math.max(0, searchTotal - shown);
-    const shownText = shown.toLocaleString('es-ES');
-    const totalText = searchTotal.toLocaleString('es-ES');
-    const nextChunk = Math.min(SEARCH_RENDER_STEP, remain);
-    list.innerHTML += `<div class="search-load-more-wrap">
-      <div class="search-results-counter">Mostrando ${shownText} de ${totalText} resultados</div>
-      ${remain > 0 ? `<button class="search-load-more-btn" id="search-load-more" type="button">Cargar ${nextChunk} más · ${remain} restantes</button>` : ''}
-    </div>`;
-    if (remain > 0) {
-      const loadMoreBtn = document.getElementById('search-load-more');
-      if (loadMoreBtn) {
-        loadMoreBtn.addEventListener('click', () => {
-          _searchRenderLimit += SEARCH_RENDER_STEP;
-          render();
-        });
-      }
-    }
-  } else if (!searchActive && allFiltered.length > visible.length) {
-    const shown = visible.length;
-    const remain = allFiltered.length - shown;
-    const shownText = shown.toLocaleString('es-ES');
-    const totalText = allFiltered.length.toLocaleString('es-ES');
-    const nextChunk = Math.min(LIST_RENDER_STEP, remain);
-    list.innerHTML += `<div class="search-load-more-wrap">
-      <div class="search-results-counter">Mostrando ${shownText} de ${totalText} tareas</div>
-      <button class="search-load-more-btn" id="list-load-more" type="button">Cargar ${nextChunk} más · ${remain} restantes</button>
-    </div>`;
-    const loadMoreBtn = document.getElementById('list-load-more');
-    if (loadMoreBtn) {
-      loadMoreBtn.addEventListener('click', () => {
-        _listRenderLimit += LIST_RENDER_STEP;
-        render();
-      });
-    }
+// Sólo reemplazar nodos cuyo contenido cambió. Se conservan también el foco
+// y la posición de las tarjetas que permanecen en la página.
+function updateTaskRows(list, rows) {
+  const existing = new Map();
+  for (const node of Array.from(list.children)) {
+    if (node.taskRow) existing.set(node.taskRow.key, node);
+    else if (!node.classList.contains('task-pagination')) node.remove();
   }
-  // Refresh project detail if open
-  if (currentDetailProjId) renderProjectDetailTasks();
+  const keys = new Set(rows.map(row => row.key));
+  for (const [key, node] of existing) if (!keys.has(key)) node.remove();
+  let cursor = list.firstElementChild;
+  for (const row of rows) {
+    let node = existing.get(row.key);
+    existing.delete(row.key);
+    if (!node || node.taskRow.html !== row.html) {
+      const template = document.createElement('template');
+      template.innerHTML = row.html;
+      const replacement = template.content.firstElementChild;
+      replacement.taskRow = row;
+      if (node) {
+        if (cursor === node) cursor = replacement;
+        node.replaceWith(replacement);
+      }
+      node = replacement;
+    }
+    if (node !== cursor) list.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
+  }
+  for (const node of existing.values()) node.remove();
+}
+
+const taskMarkdown = new WeakMap();
+function taskMarkup(task) {
+  let saved = taskMarkdown.get(task);
+  if (!saved || saved.text !== task.text || saved.desc !== task.desc) {
+    saved = { text: task.text, desc: task.desc, titleHtml: renderMd(task.text), descHtml: renderMd(task.desc) };
+    taskMarkdown.set(task, saved);
+  }
+  return saved;
 }
 
 function renderTaskItem(t) {
+  const markup = taskMarkup(t);
   const taskCats = getTaskCats(t);
   const primaryCat = taskCats.length ? (CATS[taskCats[0]] || CATS.otro) : null;
   const extraCount = taskCats.length - 1;
@@ -1646,8 +1660,8 @@ function renderTaskItem(t) {
       <div class="task-row-top">
         <div class="task-check ${t.done?'checked':''}" onclick="toggleDone(${t.id})" title="${t.done?'Reabrir':'Completar'}">${checkSvg}</div>
         <div class="task-body" onclick="openTaskDetail(${t.id})" style="cursor:pointer">
-          <div class="task-text md-content">${renderMd(t.text)}</div>
-          ${t.desc ? `<div class="task-desc md-content">${renderMd(t.desc)}</div>` : ''}
+          <div class="task-text md-content">${markup.titleHtml}</div>
+          ${t.desc ? `<div class="task-desc md-content">${markup.descHtml}</div>` : ''}
         </div>
         <div class="task-actions">
           <button class="act-btn edit" onclick="editTask(${t.id})" title="Editar">✎</button>
@@ -1727,6 +1741,8 @@ function scheduleMinuteTick() {
   const now = new Date();
   const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
   setTimeout(() => {
+    _suggestionsAnalysisCache = null;
+    suggestionJob = null;
     render();
     updateDayRing();
     updateDateLabel();
@@ -1751,10 +1767,10 @@ function setPriorityFilter(nextPri, swipeDelta = 0) {
   if (!PRIORITY_ORDER.includes(nextPri)) return;
   if (priFilter === nextPri) return;
   priFilter = nextPri;
-  _listRenderLimit = LIST_RENDER_STEP;
 
   document.querySelectorAll('.pri-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.pri === nextPri);
+    btn.setAttribute('aria-selected', String(btn.dataset.pri === nextPri));
   });
 
   const priTabs = document.querySelector('.pri-tabs');
@@ -1766,13 +1782,6 @@ function setPriorityFilter(nextPri, swipeDelta = 0) {
     setTimeout(() => priTabs.classList.remove('pri-swipe-left', 'pri-swipe-right'), 260);
   }
 
-  const taskMount = document.getElementById('task-mount');
-  if (taskMount && swipeDelta) {
-    taskMount.classList.remove('task-mount-swipe-left', 'task-mount-swipe-right');
-    void taskMount.offsetWidth;
-    taskMount.classList.add(swipeDelta < 0 ? 'task-mount-swipe-left' : 'task-mount-swipe-right');
-    setTimeout(() => taskMount.classList.remove('task-mount-swipe-left', 'task-mount-swipe-right'), 250);
-  }
 
   render();
 }
@@ -2000,7 +2009,7 @@ function triggerSearchRender(immediate = false) {
   if (searchInput) {
     searchInput.addEventListener('input', () => {
       searchQuery = searchInput.value.trim();
-      _searchRenderLimit = SEARCH_RENDER_STEP;
+
       syncSearchUi();
       triggerSearchRender();
     });
@@ -2008,7 +2017,7 @@ function triggerSearchRender(immediate = false) {
       if (e.key === 'Escape' && searchQuery) {
         searchQuery = '';
         searchInput.value = '';
-        _searchRenderLimit = SEARCH_RENDER_STEP;
+
         syncSearchUi();
         triggerSearchRender(true);
       }
@@ -2018,7 +2027,7 @@ function triggerSearchRender(immediate = false) {
     searchClear.addEventListener('click', () => {
       searchQuery = '';
       if (searchInput) searchInput.value = '';
-      _searchRenderLimit = SEARCH_RENDER_STEP;
+
       syncSearchUi();
       triggerSearchRender(true);
       searchInput?.focus();
@@ -2031,7 +2040,7 @@ function triggerSearchRender(immediate = false) {
       document.querySelectorAll('.scope-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       dateScope = btn.dataset.scope;
-      _listRenderLimit = LIST_RENDER_STEP;
+
       document.getElementById('scope-toggle-label').textContent = btn.textContent.trim();
       render();
     });
@@ -2404,9 +2413,12 @@ function renderDetailBody(id) {
     return `<span class="tag"><span class="tag-dot" style="background:${c.color}"></span>${c.label}</span>`;
   }).join('');
   const subs = getSubtasks(id);
-  const displaySubs = subtaskFilter === 'pending' ? subs.filter(s => !s.done)
+  const matchingSubs = subtaskFilter === 'pending' ? subs.filter(s => !s.done)
     : subtaskFilter === 'done' ? subs.filter(s => s.done)
     : subs;
+  if (subtaskFilter === 'done') matchingSubs.sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
+  const page = taskPage(detailBody, id + '/' + subtaskFilter, matchingSubs);
+  const displaySubs = page.items;
   const emptyMsg = subtaskFilter === 'pending' ? 'Sin subtareas pendientes'
     : subtaskFilter === 'done' ? 'Sin subtareas completadas'
     : 'Sin subtareas aún';
@@ -2444,6 +2456,7 @@ function renderDetailBody(id) {
     </div>
   `;
 
+  page.mount(() => renderDetailBody(id));
   // Wire action buttons
   document.getElementById('detail-add-subtask').addEventListener('click', () => {
     subtaskParentId = id;
@@ -2525,8 +2538,15 @@ function renderDetailBody(id) {
       const oldOrigDue = task.origDue || '';
       const baseDue = task.origDue || task.due || todayISO();
       let next = addRepeat(baseDue, task.dueTime || '', task.repeat);
+      let steps = 0;
       while (task.due && next.due <= task.due) {
-        next = addRepeat(next.due, next.dueTime || '', task.repeat);
+        if (++steps % 128 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+        const later = addRepeat(next.due, next.dueTime || '', task.repeat);
+        if (later.due + ' ' + later.dueTime <= next.due + ' ' + next.dueTime) {
+          showToast('Revisa el intervalo de repetición de esta tarea');
+          return;
+        }
+        next = later;
       }
       task.due = next.due;
       task.dueTime = next.dueTime || '';
@@ -2595,6 +2615,7 @@ function renderDetailBody(id) {
 }
 
 function renderSubtaskItem(t) {
+  const markup = taskMarkup(t);
   const taskCats = getTaskCats(t);
   const primaryCat = taskCats.length ? (CATS[taskCats[0]] || null) : null;
   const extraCount = taskCats.length - 1;
@@ -2609,8 +2630,8 @@ function renderSubtaskItem(t) {
     <div class="task-row-top">
       <div class="task-check ${t.done?'checked':''}" data-subtask-toggle="${t.id}" title="${t.done?'Reabrir':'Completar'}">${t.done ? '<svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}</div>
       <div class="task-body" style="cursor:pointer">
-        <div class="task-text md-content">${renderMd(t.text)}</div>
-        ${t.desc ? `<div class="task-desc md-content">${renderMd(t.desc)}</div>` : ''}
+        <div class="task-text md-content">${markup.titleHtml}</div>
+        ${t.desc ? `<div class="task-desc md-content">${markup.descHtml}</div>` : ''}
       </div>
       <div class="task-actions">
         <button class="act-btn edit" data-subtask-edit="${t.id}" title="Editar">✎</button>
@@ -3367,6 +3388,7 @@ async function clearAllData() {
     for (const p of await dbGetAllProjects()) await dbDeleteProject(p.id);
 
     tasks = [];
+    markDirty();
     aiChats = [];
     aiChatFolders = [];
     CATS = { ...CATS_DEFAULT };
@@ -3382,7 +3404,6 @@ async function clearAllData() {
     confirmEl.style.display = 'none';
     statusEl.textContent = '✓ Datos borrados.';
     statusEl.className = 'settings-data-status ok';
-    markDirty();
     showToast('✓ Datos borrados');
   } catch (err) {
     confirmEl.style.display = 'none';
@@ -3403,31 +3424,19 @@ async function restoreFromPayload(payload) {
     aiChats:       Array.isArray(payload.aiChats)       ? payload.aiChats       : null,
     aiChatFolders: Array.isArray(payload.aiChatFolders) ? payload.aiChatFolders : null
   };
-  await dbClear();
-  for (const t of incoming.tasks)      await dbPut(t);
-  for (const c of await dbGetAllCats()) await dbDeleteCat(c.key);
-  for (const c of incoming.categories) await dbPutCat(c);
-  for (const p of await dbGetAllProjects()) await dbDeleteProject(p.id);
-  for (const p of incoming.projects)   await dbPutProject(p);
-  // Restaurar historial si viene en el payload
-  if (incoming.history.length) {
-    await dbClearHistory();
-    for (const h of incoming.history) await dbAddHistory(h);
+  const changes = [
+    { store: STORE, values: incoming.tasks, clear: true },
+    { store: CAT_STORE, values: incoming.categories, clear: true },
+    { store: PROJ_STORE, values: incoming.projects, clear: true }
+  ];
+  if (incoming.history.length) changes.push({ store: HIST_STORE, values: incoming.history, clear: true });
+  if (incoming.aiChatFolders) {
+    const folders = incoming.aiChatFolders.map(normalizeAIChatFolder).filter(folder => folder && folder.id);
+    changes.push({ store: CHAT_FOLDER_STORE, values: folders, clear: true });
   }
-  // Restaurar carpetas de IA si vienen en el payload (incluyendo contexto precargado <= 5,000 tokens)
-  if (incoming.aiChatFolders !== null && typeof dbClearChatFolders === 'function') {
-    await dbClearChatFolders();
-    for (const fd of incoming.aiChatFolders) {
-      const normFd = normalizeAIChatFolder(fd);
-      if (normFd && normFd.id) await dbPutChatFolder(normFd);
-    }
-  }
-  // Restaurar conversaciones de IA si vienen en el payload
-  if (incoming.aiChats !== null && typeof dbClearChats === 'function') {
-    await dbClearChats();
-    for (const ch of incoming.aiChats) await dbPutChat(ch);
-  }
-  
+  if (incoming.aiChats) changes.push({ store: CHAT_STORE, values: incoming.aiChats, clear: true });
+  await dbWriteBatch(changes);
+
   if (payload.meta) {
     if (payload.meta.openRouterModel) {
       await dbSetMeta('openRouterModel', payload.meta.openRouterModel);
@@ -3479,6 +3488,7 @@ async function restoreFromPayload(payload) {
   }
 
   tasks = await dbGetAll();
+  invalidateTaskViews();
   await loadAIChats();
   await loadAIChatFolders();
   await sanitizeAIChatFolderReferences();
@@ -3492,54 +3502,13 @@ async function restoreFromPayload(payload) {
   await render();
   if (typeof refreshAIChatUI === 'function') refreshAIChatUI();
   _dataDirty = false;
-  _searchIndexDirty = true;
-  _searchResultCache.clear();
-  _taskTitleMapCache = null;
-  _aiContextRevision++;
-  _aiContextCache = null;
-  _aiToolQueryCache.clear();
   return incoming.tasks.length;
 }
 
 // ── Exportar datos ──
 async function exportData() {
   try {
-    const [
-      taskList, catList, projList, histList, chatList, folderList,
-      orModel, gModel, aiProv,
-      makerCats, savedThemeConfig,
-      cloudAutoSync, tokenAuditLog
-    ] = await Promise.all([
-      dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
-      typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
-      typeof dbGetAllChatFolders === 'function' ? dbGetAllChatFolders() : Promise.resolve([]),
-      dbGetMeta('openRouterModel'),
-      dbGetMeta('googleAIModel'),
-      dbGetMeta('aiProvider'),
-      dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
-      dbGetMeta('cloudAutoSync'),
-      dbGetMeta('aiTokenAuditLog')
-    ]);
-    const payload = {
-      version: 1,
-      exported: new Date().toISOString(),
-      tasks: taskList,
-      categories: catList,
-      projects: projList,
-      history: histList,
-      aiChats: chatList,
-      aiChatFolders: folderList,
-      meta: {
-        openRouterModel: orModel || null,
-        googleAIModel: gModel || null,
-        aiProvider: aiProv || null,
-        cloudAutoSync: cloudAutoSync === true,
-        makerCategories: makerCats || [],
-        themeConfig: savedThemeConfig || null,
-        aiTokenAuditLog: Array.isArray(tokenAuditLog) ? tokenAuditLog : []
-      }
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const blob = await runTaskBackup('export');
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -3565,9 +3534,8 @@ async function importData(file) {
     statusEl.className = 'settings-data-status ' + (isOk ? 'ok' : 'err');
   };
   try {
-    const text = await file.text();
     let payload;
-    try { payload = JSON.parse(text); }
+    try { payload = await runTaskBackup('import', { file }); }
     catch { setStatus('El archivo no es JSON válido.', false); return; }
     if (!payload || !Array.isArray(payload.tasks)) {
       setStatus('Formato no reconocido: falta la clave "tasks".', false);
@@ -3587,13 +3555,13 @@ async function importData(file) {
 /**
  * Llama a la API serverless para realizar operaciones de sincronización.
  */
-async function callSyncAPI(action, password, data = null) {
+async function callSyncAPI(action, password, data = null, preparedBody = null) {
   const response = await fetch('/api/sync', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
+    body: preparedBody || JSON.stringify({
       password,
       module: 'tareas',
       action,
@@ -3689,7 +3657,7 @@ async function initGithubSync() {
         try {
           // Validar la contraseña contra la API
           await callSyncAPI('auth', storedPass);
-          
+
           // Guardar en sessionStorage para la sesión activa
           sessionStorage.setItem('github_sync_pass', storedPass);
           sessionStorage.setItem('github_enc_key', storedEncKey);
@@ -3881,58 +3849,13 @@ async function executeCloudBackup(options = {}) {
   setCloudStatus('Guardando en la nube...', 'loading');
 
   try {
-    const [
-      taskList, catList, projList, histList, chatList, folderList,
-      orModel, gModel, aiProv,
-      makerCats, savedThemeConfig,
-      cloudAutoSync, tokenAuditLog
-    ] = await Promise.all([
-      dbGetAll(), dbGetAllCats(), dbGetAllProjects(), dbGetHistory(),
-      typeof dbGetAllChats === 'function' ? dbGetAllChats() : Promise.resolve([]),
-      typeof dbGetAllChatFolders === 'function' ? dbGetAllChatFolders() : Promise.resolve([]),
-      dbGetMeta('openRouterModel'),
-      dbGetMeta('googleAIModel'),
-      dbGetMeta('aiProvider'),
-      dbGetMeta('makerCategories'), dbGetMeta('themeConfig'),
-      dbGetMeta('cloudAutoSync'),
-      dbGetMeta('aiTokenAuditLog')
-    ]);
-
-    const backupData = {
-      version: 1,
-      exported: new Date().toISOString(),
-      tasks: taskList,
-      categories: catList,
-      projects: projList,
-      history: histList,
-      aiChats: chatList,
-      aiChatFolders: folderList,
-      meta: {
-        openRouterModel: orModel || null,
-        googleAIModel: gModel || null,
-        aiProvider: aiProv || null,
-        cloudAutoSync: cloudAutoSync === true,
-        makerCategories: makerCats || [],
-        themeConfig: savedThemeConfig || null,
-        aiTokenAuditLog: Array.isArray(tokenAuditLog) ? tokenAuditLog : []
-      }
-    };
-
-    const encryptedPayload = await window.encryptText(JSON.stringify(backupData), encKey);
-    const envelope = {
-      encrypted: true,
-      v: 1,
-      alg: 'AES-256-GCM',
-      kdf: 'PBKDF2-SHA256',
-      iterations: 100000,
-      ...encryptedPayload
-    };
-
-    const res = await callSyncAPI('push', password, envelope);
+    const revision = _aiContextRevision;
+    const backup = await runTaskBackup('push', { password, key: encKey });
+    const res = await callSyncAPI('push', password, null, backup.body);
 
     _backupSha = res.sha;
-    _dataDirty = false;
-    await dbSetMeta('lastBackupTime', backupData.exported);
+    _dataDirty = revision !== _aiContextRevision;
+    await dbSetMeta('lastBackupTime', backup.exported);
     await dbSetMeta('last_backup_sha', res.sha);
 
     const t = new Date();
@@ -4089,8 +4012,7 @@ async function verifyCloudVersionSilently(password, forcePrompt = false) {
         if (!encKey) {
           throw new Error('Falta la clave de cifrado para descifrar el respaldo.');
         }
-        const plain = await window.decryptText(backupData.content, encKey);
-        backupData.content = JSON.parse(plain);
+        backupData.content = await runTaskBackup('decrypt', { envelope: backupData.content, key: encKey });
       }
       showSyncModal(backupData);
     } else {
@@ -4357,18 +4279,21 @@ function renderProjectDetailTasks() {
     container.innerHTML = '<div class="proj-detail-empty">No hay tareas en este proyecto aún.</div>';
     return;
   }
-  const pending = sortTasks(projTasks.filter(t => !t.done));
-  const done    = sortTasks(projTasks.filter(t => t.done));
-  let html = '';
-  if (pending.length) {
-    html += `<div class="proj-detail-tasks-section-label">Pendientes · ${pending.length}</div>`;
-    html += pending.map(t => renderTaskItem(t)).join('');
+  const ordered = sortTasks(projTasks);
+  const page = taskPage(container, currentDetailProjId, ordered);
+  const pending = projTasks.reduce((n, t) => n + Number(!t.done), 0);
+  const rows = [];
+  let lastGroup;
+  for (const t of page.items) {
+    const group = t.done ? 'Completadas' : 'Pendientes';
+    if (group !== lastGroup) {
+      rows.push({ key: group, html: `<div class="proj-detail-tasks-section-label">${group} · ${t.done ? ordered.length - pending : pending}</div>` });
+      lastGroup = group;
+    }
+    rows.push({ key: t.id, html: renderTaskItem(t) });
   }
-  if (done.length) {
-    html += `<div class="proj-detail-tasks-section-label" style="margin-top:10px">Completadas · ${done.length}</div>`;
-    html += done.map(t => renderTaskItem(t)).join('');
-  }
-  container.innerHTML = html;
+  updateTaskRows(container, rows);
+  page.mount(renderProjectDetailTasks);
 }
 function openFormForProject(projId) {
   rebuildProjectSelect();
@@ -4385,8 +4310,14 @@ function renderProjectList() {
     projList.innerHTML = '<div class="projects-empty">No hay proyectos aún. ¡Crea el primero!</div>';
     return;
   }
-  projList.innerHTML = PROJECTS.map(p => {
-    const count = tasks.filter(t => String(t.project) === String(p.id)).length;
+  const counts = new Map();
+  for (const t of tasks) {
+    const key = String(t.project);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const page = taskPage(projList, 'projects', PROJECTS);
+  projList.innerHTML = page.items.map(p => {
+    const count = counts.get(String(p.id)) || 0;
     const countLabel = count === 1 ? '1 tarea' : count + ' tareas';
     const descHtml = p.desc ? `<div class="project-card-desc">${escHtml(p.desc)}</div>` : '';
     return `<div class="project-card" data-proj-id="${p.id}">
@@ -4402,6 +4333,7 @@ function renderProjectList() {
     </div>`;
   }).join('');
 
+  page.mount(renderProjectList);
   // Wire edit/delete buttons
   projList.querySelectorAll('[data-proj-edit]').forEach(btn => {
     btn.addEventListener('click', e => { e.stopPropagation(); showProjForm(Number(btn.dataset.projEdit)); });
@@ -4461,15 +4393,12 @@ async function executeDeleteProject(keepTasks) {
 
   const affected = tasks.filter(t => String(t.project) === String(id));
   if (keepTasks) {
-    for (const t of affected) {
-      t.project = '';
-      await dbPut(t);
-    }
+    await dbWriteBatch([{ store: STORE, values: affected.map(t => ({ ...t, project: '' })) }]);
+    for (const t of affected) t.project = '';
   } else {
-    for (const t of affected) {
-      tasks = tasks.filter(tk => tk.id !== t.id);
-      await dbDelete(t.id);
-    }
+    const ids = new Set(affected.map(t => t.id));
+    await dbWriteBatch([{ store: STORE, remove: true, values: [...ids] }]);
+    tasks = tasks.filter(t => !ids.has(t.id));
   }
 
   await deleteProjectDB(id);
@@ -4573,7 +4502,7 @@ function openStats() {
   _statsMonthOffset = 0;
   statsOverlay.classList.add('open');
   statsOverlay.setAttribute('aria-hidden', 'false');
-  renderStats();
+  return renderStats();
 }
 function closeStats() {
   statsOverlay.classList.remove('open');
@@ -4581,6 +4510,7 @@ function closeStats() {
 }
 
 async function renderStats() {
+  const statsOffsetAtOpen = _statsMonthOffset;
   const done = tasks.filter(t => t.done);
 
   // ── Global metrics ──
@@ -4609,7 +4539,8 @@ async function renderStats() {
   }
 
   // Weekly streak: count consecutive weeks (ending this week) with ≥1 completion
-  const { count: streak, startDate: streakStart } = calcWeekStreak(done);
+  const weeks = getDoneWeeksSet(done);
+  const { count: streak, startDate: streakStart } = calcWeekStreak(weeks);
   document.getElementById('stats-streak').textContent = streak;
   const streakSinceEl = document.getElementById('stats-streak-since');
   if (streakSinceEl) {
@@ -4621,7 +4552,7 @@ async function renderStats() {
   }
 
   // Historial de rachas
-  const allStreaks = calcAllStreaks(done);
+  const allStreaks = calcAllStreaks(weeks);
   const historyEl = document.getElementById('stats-streak-history');
   const streakCard = document.getElementById('stats-streak-card');
   if (historyEl) {
@@ -4655,6 +4586,7 @@ async function renderStats() {
     }
   }
 
+  await new Promise(resolve => setTimeout(resolve, 0));
   renderBreakdown(done, 'total');
 
   // ── Global Cycle Time ──
@@ -4680,7 +4612,7 @@ async function renderStats() {
   }
 
   // ── Month section ──
-  await renderMonthSection();
+  if (statsOffsetAtOpen === _statsMonthOffset) await renderMonthSection({ done, makerCats, globalCycle });
 }
 
 function isoWeekFromDateStr(dateStr) {
@@ -4714,8 +4646,7 @@ function getDoneWeeksSet(done) {
   return weeksWithDone;
 }
 
-function calcWeekStreak(done) {
-  const weeksWithDone = getDoneWeeksSet(done);
+function calcWeekStreak(weeksWithDone) {
   let count = 0;
   let startDate = null;
   const cursor = new Date();
@@ -4732,8 +4663,7 @@ function calcWeekStreak(done) {
   return { count, startDate };
 }
 
-function calcAllStreaks(done) {
-  const weekSet = getDoneWeeksSet(done);
+function calcAllStreaks(weekSet) {
   if (!weekSet.size) return [];
 
   // Sort weeks chronologically
@@ -4791,11 +4721,8 @@ function isoWeek(d) {
 
 /** Win Rate: tareas con due en el mes completadas ese mismo día / total planificadas */
 function calcWinRate(allTasks, viewYear, viewMonth) {
-  const planned = allTasks.filter(t => {
-    if (!t.due) return false;
-    const d = new Date(t.due + 'T00:00:00');
-    return d.getFullYear() === viewYear && d.getMonth() === viewMonth;
-  });
+  const month = viewYear + '-' + String(viewMonth + 1).padStart(2, '0') + '-';
+  const planned = allTasks.filter(t => t.due && t.due.startsWith(month));
   if (!planned.length) return null;
   const completedOnTime = planned.filter(t => t.done && t.doneAt === t.due);
   return Math.round(completedOnTime.length / planned.length * 100);
@@ -4842,7 +4769,9 @@ function calcImpactFactor(doneTasks, makerCats) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function renderMonthSection() {
+let monthRevision = 0;
+async function renderMonthSection(global = {}) {
+  const revision = ++monthRevision;
   const today = new Date();
   const viewYear  = today.getFullYear() + Math.floor((today.getMonth() + _statsMonthOffset) / 12);
   const viewMonth = ((today.getMonth() + _statsMonthOffset) % 12 + 12) % 12;
@@ -4852,17 +4781,14 @@ async function renderMonthSection() {
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const lastDay = isCurrentMonth ? today.getDate() : daysInMonth;
 
-  const done = tasks.filter(t => t.done);
-  const monthDone = done.filter(t => {
-    if (!t.due) return false;
-    const d = new Date(t.due + 'T00:00:00');
-    return d.getFullYear() === viewYear && d.getMonth() === viewMonth;
-  });
+  const done = global.done || tasks.filter(t => t.done);
+  const month = viewYear + '-' + String(viewMonth + 1).padStart(2, '0') + '-';
+  const monthDone = done.filter(t => t.due && t.due.startsWith(month));
 
   // Daily counts
   const dailyCounts = new Array(lastDay).fill(0);
   for (const t of monthDone) {
-    const day = new Date(t.due + 'T00:00:00').getDate();
+    const day = Number(t.due.slice(8, 10));
     if (day <= lastDay) dailyCounts[day - 1]++;
   }
 
@@ -4908,9 +4834,9 @@ async function renderMonthSection() {
   renderBreakdown(monthDone, 'month');
 
   // ── Métricas de rendimiento ──
-  const makerCats = await dbGetMeta('makerCategories').catch(() => null) || [];
-  const globalDone = tasks.filter(t => t.done);
-  const globalCycle = calcCycleTime(globalDone);
+  const makerCats = global.makerCats || await dbGetMeta('makerCategories').catch(() => null) || [];
+  if (revision !== monthRevision) return;
+  const globalCycle = global.done ? global.globalCycle : calcCycleTime(done);
 
   // Win Rate
   const wr = calcWinRate(tasks, viewYear, viewMonth);
@@ -5005,9 +4931,16 @@ function renderBreakdown(done, prefix) {
   if (!el) return;
   let html = '';
 
+  const categoryCounts = new Map();
+  const projectCounts = new Map();
+  for (const t of done) {
+    for (const key of new Set(getTaskCats(t))) categoryCounts.set(key, (categoryCounts.get(key) || 0) + 1);
+    const project = String(t.project);
+    projectCounts.set(project, (projectCounts.get(project) || 0) + 1);
+  }
   // Categories with at least 1 completion
   const catRows = Object.entries(CATS)
-    .map(([key, cat]) => ({ key, cat, count: done.filter(t => getTaskCats(t).includes(key)).length }))
+    .map(([key, cat]) => ({ key, cat, count: categoryCounts.get(key) || 0 }))
     .filter(e => e.count > 0)
     .sort((a, b) => b.count - a.count);
 
@@ -5024,7 +4957,7 @@ function renderBreakdown(done, prefix) {
 
   // Projects with at least 1 completion
   const projRows = PROJECTS
-    .map(p => ({ p, count: done.filter(t => String(t.project) === String(p.id)).length }))
+    .map(p => ({ p, count: projectCounts.get(String(p.id)) || 0 }))
     .filter(e => e.count > 0)
     .sort((a, b) => b.count - a.count);
 
@@ -5310,7 +5243,7 @@ No incluyas texto fuera del JSON. Hoy es ${new Date().toISOString().slice(0,10)}
           }
           syncRepeatN();
         }
-        
+
         magicInputText.value = '';
         showToast('✨ Formulario rellenado con IA');
       } catch (e) {
@@ -5429,11 +5362,12 @@ if (btnSnoozeDetail && snoozeDetailOverlay) {
       snoozeDetailBody.innerHTML = '<div class="detail-no-subtasks" style="text-align:center; margin-top:20px; color:var(--text-muted);">No hay tareas pospuestas este mes.</div>';
     } else {
       let html = '';
-      historyItems.forEach(item => {
+      const page = taskPage(snoozeDetailBody, viewYear + '/' + viewMonth, historyItems);
+      page.items.forEach(item => {
         const t = item.task;
         // Fallback safely if escHtml is not in global scope
         const safeTitle = typeof escHtml === 'function' ? escHtml(t.text) : t.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        
+
         let metaHtml = '';
         if (typeof getTaskCats === 'function' && typeof CATS !== 'undefined') {
           const taskCats = getTaskCats(t);
@@ -5445,7 +5379,7 @@ if (btnSnoozeDetail && snoozeDetailOverlay) {
         if (typeof getProjectBadge === 'function') metaHtml += getProjectBadge(t);
         if (typeof getPriLabel === 'function') metaHtml += getPriLabel(t.pri);
         if (typeof getDueBadge === 'function') metaHtml += getDueBadge(t);
-        
+
         html += `
           <div class="snooze-item">
             <div class="snooze-item-top">
@@ -5457,6 +5391,7 @@ if (btnSnoozeDetail && snoozeDetailOverlay) {
         `;
       });
       snoozeDetailBody.innerHTML = html;
+      page.mount(renderSnoozeGranularDetail);
     }
   }
 }
@@ -5520,9 +5455,9 @@ async function migrateHistoryRetroactive() {
       return;
     }
 
-    const sorted = [...allTasks].sort((a, b) => a.id - b.id);
-
-    for (const t of sorted) {
+    const entries = [];
+    for (const t of allTasks) {
+      if (entries.length % 256 === 0) await new Promise(resolve => setTimeout(resolve, 0));
       const createEntry = {
         id:       t.id,
         type:     'migrated',
@@ -5532,7 +5467,7 @@ async function migrateHistoryRetroactive() {
         cats:     Array.isArray(t.cats) ? t.cats : [t.cat].filter(Boolean),
         ts:       new Date(t.id).toISOString(),
       };
-      await dbAddHistory(createEntry);
+      entries.push(createEntry);
 
       if (t.done) {
         const doneTs = t.doneAt
@@ -5547,11 +5482,11 @@ async function migrateHistoryRetroactive() {
           cats:     Array.isArray(t.cats) ? t.cats : [t.cat].filter(Boolean),
           ts:       new Date(doneTs).toISOString(),
         };
-        await dbAddHistory(doneEntry);
+        entries.push(doneEntry);
       }
     }
 
-    await dbSetMeta('historyMigrated', true);
+    await dbWriteBatch([{ store: HIST_STORE, values: entries }, { store: META_STORE, values: [{ key: 'historyMigrated', value: true }] }]);
   } catch (err) {
     console.warn('migrateHistoryRetroactive error:', err);
   }

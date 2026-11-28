@@ -62,10 +62,9 @@
   const closeBtn  = document.getElementById('history-close');
   const filterBar = document.getElementById('history-filter-bar');
 
-  let _historyEntries = [];
+  let counts;
+  let revision = 0;
   let _activeFilter   = 'all';
-  const HISTORY_PAGE_SIZE = 60;
-  let _historyLimit   = HISTORY_PAGE_SIZE;
 
   // ── Helpers de fecha ──
   function _isoDate(ms) {
@@ -86,7 +85,7 @@
 
   function _timeStr(ms) {
     const d = new Date(ms);
-    return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    return taskDates.time.format(d);
   }
 
   // ── Íconos y etiquetas por tipo ──
@@ -125,27 +124,21 @@
   }
 
   // ── Renderizado principal ──
-  function renderHistory() {
-    const filtered = _activeFilter === 'all'
-      ? _historyEntries
-      : _historyEntries.filter(e => e.type === _activeFilter);
-
-    // Stats
-    document.getElementById('hstat-total').textContent   = _historyEntries.length;
-    document.getElementById('hstat-created').textContent = _historyEntries.filter(e => e.type === 'created' || e.type === 'migrated').length;
-    document.getElementById('hstat-done').textContent    = _historyEntries.filter(e => e.type === 'completed').length;
-    document.getElementById('hstat-deleted').textContent = _historyEntries.filter(e => e.type === 'deleted').length;
-
-    // Sub-label en el header
+  async function renderHistory() {
+    const version = ++revision;
+    const total = counts[_activeFilter];
+    const page = taskPage(body, _activeFilter, total);
+    const visibleEntries = await dbHistoryPage(_activeFilter, page.start, TASK_PAGE_SIZE);
+    if (version !== revision) return;
+    document.getElementById('hstat-total').textContent = counts.all;
+    document.getElementById('hstat-created').textContent = counts.created + counts.migrated;
+    document.getElementById('hstat-done').textContent = counts.completed;
+    document.getElementById('hstat-deleted').textContent = counts.deleted;
     const sub = document.getElementById('history-header-sub');
-    if (sub) {
-      sub.textContent = filtered.length === _historyEntries.length
-        ? `${_historyEntries.length} evento${_historyEntries.length !== 1 ? 's' : ''} registrado${_historyEntries.length !== 1 ? 's' : ''}`
-        : `${filtered.length} de ${_historyEntries.length} evento${_historyEntries.length !== 1 ? 's' : ''}`;
-    }
+    sub.textContent = total === counts.all ? total + ' eventos registrados' : total + ' de ' + counts.all + ' eventos';
 
     // Estado vacío
-    if (filtered.length === 0) {
+    if (total === 0) {
       body.innerHTML = `
         <div class="history-empty">
           <div class="history-empty-icon">◷</div>
@@ -159,9 +152,6 @@
       return;
     }
 
-    // Agrupar por fecha con paginación progresiva para mantener 60 FPS
-    const sorted = [...filtered].sort((a, b) => b.id - a.id);
-    const visibleEntries = sorted.slice(0, _historyLimit);
     const byDay  = new Map();
     for (const e of visibleEntries) {
       const day = _isoDate(e.id);
@@ -200,61 +190,48 @@
       html += `</div>`;
     }
 
-    if (sorted.length > _historyLimit) {
-      const remaining = sorted.length - _historyLimit;
-      const nextChunk = Math.min(HISTORY_PAGE_SIZE, remaining);
-      html += `
-        <div class="search-load-more-wrap" style="padding:16px 0; text-align:center;">
-          <div class="search-results-counter" style="margin-bottom:8px;">Mostrando ${_historyLimit.toLocaleString('es-ES')} de ${sorted.length.toLocaleString('es-ES')} eventos</div>
-          <button class="search-load-more-btn" id="history-load-more" type="button">Cargar ${nextChunk} más · ${remaining} restantes</button>
-        </div>`;
-    }
-
     body.innerHTML = html;
-
-    const loadMoreBtn = document.getElementById('history-load-more');
-    if (loadMoreBtn) {
-      loadMoreBtn.addEventListener('click', () => {
-        _historyLimit += HISTORY_PAGE_SIZE;
-        renderHistory();
-      });
-    }
+    page.mount(renderHistory);
   }
 
   // ── Filtros ──
   filterBar.addEventListener('click', e => {
     const btn = e.target.closest('.history-filter-btn');
-    if (!btn) return;
+    if (!btn || !counts) return;
     filterBar.querySelectorAll('.history-filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     _activeFilter = btn.dataset.hfilter;
-    _historyLimit = HISTORY_PAGE_SIZE;
     renderHistory();
   });
 
   // ── Abrir ──
   window.openHistory = async function () {
-    _historyEntries = await dbGetHistory();
-    _historyEntries.sort((a, b) => b.id - a.id);
+    const version = ++revision;
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden', 'false');
+    body.textContent = 'Cargando historial…';
+    counts = null;
+    const result = await dbHistoryCounts();
+    if (version !== revision) return;
+    counts = result;
     _activeFilter = 'all';
-    _historyLimit = HISTORY_PAGE_SIZE;
+    taskPageStates.delete(body);
     filterBar.querySelectorAll('.history-filter-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.hfilter === 'all');
     });
-    renderHistory();
-    overlay.classList.add('open');
-    overlay.setAttribute('aria-hidden', 'false');
+    await renderHistory();
   };
 
   // ── Cerrar ──
   window.closeHistory = function () {
+    revision++;
     overlay.classList.remove('open');
     overlay.setAttribute('aria-hidden', 'true');
   };
 
   // ── Registrar evento (llamado desde app.js) ──
-  window.addHistoryEntry = async function (type, task, overrides) {
-    const entry = {
+  window.makeTaskHistoryEntry = function (type, task, overrides) {
+    return {
       id:       Date.now() + Math.floor(Math.random() * 100),
       type,
       taskId:   task ? task.id   : null,
@@ -264,7 +241,9 @@
       ts:       new Date().toISOString(),
       ...(overrides || {}),
     };
-    await dbAddHistory(entry);
+  };
+  window.addHistoryEntry = function (type, task, overrides) {
+    return dbAddHistory(makeTaskHistoryEntry(type, task, overrides));
   };
 
   // ── Eventos de cierre ──

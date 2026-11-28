@@ -2,7 +2,7 @@
 // crypto.js — Utilidades criptográficas locales globales (Web Crypto API)
 // ============================================================
 
-(function(window) {
+(function(scope) {
     /**
      * Deriva una clave criptográfica AES-GCM a partir de una contraseña y una sal (salt).
      * @param {string} password - Contraseña maestra
@@ -107,6 +107,6 @@
     }
 
     // Exponer a window global
-    window.encryptText = encryptText;
-    window.decryptText = decryptText;
-})(window);
+    scope.encryptText = encryptText;
+    scope.decryptText = decryptText;
+})(self);

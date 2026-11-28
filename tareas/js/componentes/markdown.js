@@ -109,6 +109,8 @@ function renderMd(src) {
       paraLines.push(lines[i]);
       i++;
     }
+    // Una fila con barras sin separador de tabla también es texto normal.
+    if (!paraLines.length) paraLines.push(lines[i++]);
     html += `<p>${_inline(paraLines.join('\n'))}</p>`;
   }
 

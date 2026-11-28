@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ntb-cache-v21';
+const CACHE_NAME = 'ntb-cache-v22';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -13,6 +13,23 @@ const PRECACHE_ASSETS = [
   '/blog/css/estilos.css',
   '/notas/css/estilos.css',
   '/tareas/css/estilos.css',
+  '/tareas/js/componentes/db.js',
+  '/tareas/js/componentes/crypto.js',
+  '/tareas/js/componentes/backup.js',
+  '/tareas/js/componentes/categorias.js',
+  '/tareas/js/componentes/proyectos.js',
+  '/tareas/js/componentes/helpers.js',
+  '/tareas/js/componentes/markdown.js',
+  '/tareas/components/header.js',
+  '/tareas/components/form.js',
+  '/tareas/components/filters.js',
+  '/tareas/components/taskSection.js',
+  '/tareas/components/settings.js',
+  '/tareas/components/projects.js',
+  '/tareas/components/stats.js',
+  '/tareas/components/history.js',
+  '/tareas/components/docs.js',
+  '/tareas/js/app.js',
   '/sw-register.js',
   '/icon.svg',
   '/manifest.json'

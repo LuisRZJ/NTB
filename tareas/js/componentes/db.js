@@ -19,7 +19,7 @@
  */
 
 const DB_NAME    = 'TareasDB';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 const STORE      = 'tasks';
 const CAT_STORE  = 'categories';
 const PROJ_STORE = 'projects';
@@ -32,6 +32,10 @@ let _db = null;
 function dbInit() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onblocked = () => {
+      const loader = typeof document !== 'undefined' && document.querySelector('#loader .loader-text');
+      if (loader) loader.textContent = 'Cierra las otras pestañas de NTB para actualizar el historial';
+    };
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -50,6 +54,8 @@ function dbInit() {
         const hs = db.createObjectStore(HIST_STORE, { keyPath: 'id' });
         hs.createIndex('by_ts', 'ts', { unique: false });
       }
+      const history = req.transaction.objectStore(HIST_STORE);
+      if (!history.indexNames.contains('by_type')) history.createIndex('by_type', 'type');
       if (!db.objectStoreNames.contains(CHAT_STORE)) {
         db.createObjectStore(CHAT_STORE, { keyPath: 'id' });
       }
@@ -57,7 +63,12 @@ function dbInit() {
         db.createObjectStore(CHAT_FOLDER_STORE, { keyPath: 'id' });
       }
     };
-    req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+    req.onsuccess = e => {
+      _db = e.target.result;
+      const connection = _db;
+      connection.onversionchange = () => connection.close();
+      resolve(_db);
+    };
     req.onerror   = e => reject(e.target.error);
   });
 }
@@ -74,6 +85,40 @@ function dbGetAll() {
     const req = _store('readonly').getAll();
     req.onsuccess = () => resolve(req.result);
     req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// Una sola transacción por operación. Se encolan pequeñas tandas desde
+// callbacks de IndexedDB para ceder el hilo sin perder la atomicidad.
+function dbWriteBatch(changes) {
+  return new Promise((resolve, reject) => {
+    const tx = _db.transaction(changes.map(change => change.store), 'readwrite');
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error || new Error('Escritura cancelada'));
+    let group = 0;
+    let index = 0;
+    function enqueue() {
+      let last;
+      let budget = 96;
+      try {
+        while (group < changes.length && budget > 0) {
+          const change = changes[group];
+          const store = tx.objectStore(change.store);
+          if (index === 0 && change.clear) last = store.clear();
+          while (index < change.values.length && budget > 0) {
+            const value = change.values[index++];
+            last = change.remove ? store.delete(value) : store.put(value);
+            budget--;
+          }
+          if (index === change.values.length) { group++; index = 0; }
+        }
+        if (group < changes.length) last.onsuccess = enqueue;
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
+    }
+    enqueue();
   });
 }
 
@@ -194,6 +239,33 @@ function dbGetHistory() {
     const req = _histStore('readonly').getAll();
     req.onsuccess = () => resolve(req.result);
     req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbHistoryCounts() {
+  const store = _histStore('readonly');
+  const types = ['all', 'created', 'migrated', 'completed', 'deleted', 'edited', 'reopened'];
+  return Promise.all(types.map(type => new Promise((resolve, reject) => {
+    const req = type === 'all' ? store.count() : store.index('by_type').count(type);
+    req.onsuccess = () => resolve([type, req.result]);
+    req.onerror = () => reject(req.error);
+  }))).then(Object.fromEntries);
+}
+
+function dbHistoryPage(type, offset, limit) {
+  return new Promise((resolve, reject) => {
+    const store = _histStore('readonly');
+    const req = type === 'all' ? store.openCursor(null, 'prev') : store.index('by_type').openCursor(type, 'prev');
+    const entries = [];
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) { resolve(entries); return; }
+      if (offset) { cursor.advance(offset); offset = 0; return; }
+      entries.push(cursor.value);
+      if (entries.length === limit) resolve(entries);
+      else cursor.continue();
+    };
   });
 }
 
